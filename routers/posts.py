@@ -18,39 +18,6 @@ def create_post(post: Post, session: Session = Depends(get_session)):
     return post
 
 
-# -----------------------------
-# LIST POSTS (with sort + filter)
-# -----------------------------
-@router.get("/")
-def get_posts(
-    platform: str | None = None,
-    sort: str | None = None,
-    session: Session = Depends(get_session)
-):
-    query = select(Post).where(Post.parent_id == None)
-
-    if platform:
-        query = query.where(Post.platform == platform)
-
-    if sort == "newest":
-        query = query.order_by(desc(Post.posted_at))
-    elif sort == "oldest":
-        query = query.order_by(Post.posted_at)
-
-    posts = session.exec(query).all()
-
-    enriched = []
-    for p in posts:
-        author = session.get(Author, p.author_id) if p.author_id else None
-
-        post_data = p.dict()
-        post_data["author_name"] = author.name if author else None
-        post_data["author_photo"] = author.profile_photo_url if author else None
-
-        enriched.append(post_data)
-
-    return enriched
-
 
 # -----------------------------
 # GET ONE POST (with children + comments loaded)
