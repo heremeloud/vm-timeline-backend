@@ -55,49 +55,40 @@ def get_posts(
 # -----------------------------
 # GET ONE POST (with children + comments loaded)
 # -----------------------------
-@router.get("/{post_id}")
-def get_one_post(post_id: int, session: Session = Depends(get_session)):
-    post = session.get(Post, post_id)
-    if not post:
-        raise HTTPException(status_code=404, detail="Not found")
+@router.get("/")
+def get_posts(
+    platform: str | None = None,
+    sort: str | None = None,
+    offset: int = 0,
+    limit: int = 10,
+    session: Session = Depends(get_session)
+):
+    query = select(Post).where(Post.parent_id == None)
 
-    # Load children
-    children = session.exec(
-        select(Post).where(Post.parent_id == post_id)
-    ).all()
+    if platform:
+        query = query.where(Post.platform == platform)
 
-    # Load IG replies
-    comments = session.exec(
-        select(PostText).where(PostText.post_id == post_id)
-    ).all()
+    # Sort inside DB
+    if sort == "newest":
+        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+    elif sort == "oldest":
+        query = query.order_by(Post.posted_at, Post.id)
 
-    # Expand post with author fields
-    post_data = post.dict()
-    post_data["author_name"] = post.author_name
-    post_data["author_photo"] = post.author_photo
+    # Pagination
+    query = query.offset(offset).limit(limit)
 
-    # Expand children with author fields
-    children_data = []
-    for c in children:
-        cd = c.dict()
-        cd["author_name"] = c.author_name
-        cd["author_photo"] = c.author_photo
-        children_data.append(cd)
+    posts = session.exec(query).all()
 
-    # Expand comments with author fields
-    comments_data = []
-    for c in comments:
-        cd = c.dict()
-        cd["author_name"] = c.author_name
-        cd["author_photo"] = c.author_photo
-        comments_data.append(cd)
+    enriched = []
+    for p in posts:
+        author = session.get(Author, p.author_id) if p.author_id else None
 
-    return {
-        "post": post_data,
-        "children": children_data,
-        "comments": comments_data
-    }
+        post_data = p.dict()
+        post_data["author_name"] = author.name if author else None
+        post_data["author_photo"] = author.profile_photo_url if author else None
+        enriched.append(post_data)
 
+    return enriched
 
 # -----------------------------
 # CREATE A TWEET REPLY (child Post)
