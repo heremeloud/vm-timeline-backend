@@ -45,7 +45,7 @@ app.include_router(authors.router)   # /authors/...
 # ---------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://vm-social.vercel.app"],   
+    allow_origins=["https://vm-social.vercel.app", "https://viewmim.vercel.app"],   
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
