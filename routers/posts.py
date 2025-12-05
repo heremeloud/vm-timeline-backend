@@ -58,7 +58,7 @@ def get_posts(
 @router.get("/")
 def get_posts(
     platform: str | None = None,
-    sort: str | None = None,
+    sort: str = "newest",
     offset: int = 0,
     limit: int = 10,
     session: Session = Depends(get_session)
@@ -68,13 +68,13 @@ def get_posts(
     if platform:
         query = query.where(Post.platform == platform)
 
-    # Sort inside DB
+    # Sorting
     if sort == "newest":
         query = query.order_by(desc(Post.posted_at), desc(Post.id))
-    elif sort == "oldest":
+    else:
         query = query.order_by(Post.posted_at, Post.id)
 
-    # Pagination
+    # Apply pagination
     query = query.offset(offset).limit(limit)
 
     posts = session.exec(query).all()
@@ -83,10 +83,11 @@ def get_posts(
     for p in posts:
         author = session.get(Author, p.author_id) if p.author_id else None
 
-        post_data = p.dict()
-        post_data["author_name"] = author.name if author else None
-        post_data["author_photo"] = author.profile_photo_url if author else None
-        enriched.append(post_data)
+        obj = p.dict()
+        obj["author_name"] = author.name if author else None
+        obj["author_photo"] = author.profile_photo_url if author else None
+
+        enriched.append(obj)
 
     return enriched
 
