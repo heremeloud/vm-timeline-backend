@@ -6,6 +6,17 @@ from middleware.auth import require_admin
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
+@router.get("/{post_id}")
+def get_post(post_id: int, session: Session = Depends(get_session)):
+    post = session.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    author = session.get(Author, post.author_id) if post.author_id else None
+    obj = post.dict()
+    obj["author_name"] = author.name if author else None
+    obj["author_photo"] = author.profile_photo_url if author else None
+    return {"post": obj}
 
 # -----------------------------
 # CREATE MAIN POST (IG or X)
