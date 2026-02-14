@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 
 # Routers
-from routers import posts, texts, authors
+from routers import posts, texts, authors, events  
 
 
 app = FastAPI(title="VM Social Timeline API")
@@ -38,6 +38,7 @@ app.include_router(auth.router)      # /auth/login, require_admin
 app.include_router(posts.router)     # /posts/...
 app.include_router(texts.router)     # /texts/...
 app.include_router(authors.router)   # /authors/...
+app.include_router(events.router)    # /events/...
 
 
 # ---------------------------------------------------------
