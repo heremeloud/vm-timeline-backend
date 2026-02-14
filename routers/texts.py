@@ -10,11 +10,20 @@ router = APIRouter(prefix="/texts", tags=["Texts"])
 # ---------------------------------
 # ADD IG COMMENT OR TRANSLATION
 # ---------------------------------
+
 @router.post("/", dependencies=[Depends(require_admin)])
 def add_text(text: PostText, session: Session = Depends(get_session)):
     post = session.get(Post, text.post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    # Optional: enforce type matches platform
+    if text.type.startswith("ig-") and post.platform != "ig":
+        raise HTTPException(
+            status_code=400, detail="ig-* text must belong to an IG post")
+    if text.type.startswith("tt-") and post.platform != "tt":
+        raise HTTPException(
+            status_code=400, detail="tt-* text must belong to a TikTok post")
 
     session.add(text)
     session.commit()
@@ -65,12 +74,13 @@ def delete_pair(text_id: int, session: Session = Depends(get_session)):
     session.delete(parent)
     session.commit()
 
-    return {"message": "IG reply pair deleted", "id": text_id}
+    return {"message": "Reply pair deleted", "id": text_id}
 
 
 # ---------------------------------
-# EDIT IG COMMENT + TRANSLATION
+# EDIT IG/TT COMMENT + TRANSLATION
 # ---------------------------------
+
 @router.patch("/pair/{text_id}", dependencies=[Depends(require_admin)])
 def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_session)):
 
@@ -82,36 +92,47 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
     parent.content = payload.get("caption", parent.content)
     parent.media_url = payload.get("media_url", parent.media_url)
 
-    # FIX: use author_id instead of author
     if "author_id" in payload:
         parent.author_id = payload["author_id"]
 
-    # Find translation row
+    # Decide translation type based on parent.type
+    if parent.type == "ig-comment":
+        translation_type = "ig-translation"
+    elif parent.type == "tt-comment":
+        translation_type = "tt-translation"
+    else:
+        # If you want strict: raise instead of fallback
+        raise HTTPException(
+            status_code=400, detail=f"Unsupported parent type: {parent.type}")
+
+    # Find translation row (child)
     child = session.exec(
         select(PostText).where(PostText.parent_comment_id == text_id)
     ).first()
 
     new_trans = payload.get("translation")
+    new_lang = payload.get("translation_language", "en")
 
     # If translation was removed
     if new_trans is None or new_trans.strip() == "":
         if child:
             session.delete(child)
-
     else:
-        # If translation exists, update it
         if child:
             child.content = new_trans
+            child.type = translation_type
+            child.language = new_lang
+            child.author_id = parent.author_id
         else:
             new_child = PostText(
                 post_id=parent.post_id,
-                type="ig-translation",
-                language="en",
+                type=translation_type,
+                language=new_lang,
                 content=new_trans,
                 parent_comment_id=text_id,
-                author_id=parent.author_id,   # also use author_id here
+                author_id=parent.author_id,
             )
             session.add(new_child)
 
     session.commit()
-    return {"message": "IG reply updated"}
+    return {"message": "Reply updated"}

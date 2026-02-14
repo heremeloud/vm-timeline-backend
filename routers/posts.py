@@ -6,6 +6,7 @@ from middleware.auth import require_admin
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
+
 @router.get("/{post_id}")
 def get_post(post_id: int, session: Session = Depends(get_session)):
     post = session.get(Post, post_id)
@@ -21,13 +22,14 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 # -----------------------------
 # CREATE MAIN POST (IG or X)
 # -----------------------------
+
+
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
     session.add(post)
     session.commit()
     session.refresh(post)
     return post
-
 
 
 # -----------------------------
@@ -72,26 +74,46 @@ def get_posts(
 # -----------------------------
 # CREATE A TWEET REPLY (child Post)
 # -----------------------------
+# @router.post("/{post_id}/reply", dependencies=[Depends(require_admin)])
+# def create_reply(
+#     post_id: int,
+#     reply: Post,
+#     session: Session = Depends(get_session)
+# ):
+#     parent = session.get(Post, post_id)
+#     if not parent:
+#         raise HTTPException(status_code=404, detail="Parent post not found")
+
+#     reply.parent_id = post_id
+#     session.add(reply)
+#     session.commit()
+#     session.refresh(reply)
+#     return reply
+
+
 @router.post("/{post_id}/reply", dependencies=[Depends(require_admin)])
-def create_reply(
-    post_id: int,
-    reply: Post,
-    session: Session = Depends(get_session)
-):
+def create_reply(post_id: int, reply: Post, session: Session = Depends(get_session)):
     parent = session.get(Post, post_id)
     if not parent:
         raise HTTPException(status_code=404, detail="Parent post not found")
 
+    # Only X uses Post-children threading
+    if parent.platform != "x":
+        raise HTTPException(
+            status_code=400, detail="Only X posts support /reply threads")
+
     reply.parent_id = post_id
+    reply.platform = "x"  # enforce
     session.add(reply)
     session.commit()
     session.refresh(reply)
     return reply
 
-
 # -----------------------------
 # GET TWEET THREAD
 # -----------------------------
+
+
 @router.get("/{post_id}/thread")
 def get_thread(post_id: int, session: Session = Depends(get_session)):
     replies = session.exec(
