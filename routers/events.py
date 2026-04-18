@@ -228,7 +228,7 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if payload.announcement_url is not None:
         ev.announcement_url = payload.announcement_url.strip() or None
 
-    if payload.live_url is not None:  # ✅ NEW
+    if payload.live_url is not None:  
         ev.live_url = payload.live_url.strip() or None
 
     session.add(ev)

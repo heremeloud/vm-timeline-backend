@@ -96,12 +96,11 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
         parent.author_id = payload["author_id"]
 
     # Decide translation type based on parent.type
-    if parent.type == "ig-comment":
+    if parent.type in ("ig-comment", "ig-reply"):
         translation_type = "ig-translation"
-    elif parent.type == "tt-comment":
+    elif parent.type in ("tt-comment", "tt-reply"):
         translation_type = "tt-translation"
     else:
-        # If you want strict: raise instead of fallback
         raise HTTPException(
             status_code=400, detail=f"Unsupported parent type: {parent.type}")
 
