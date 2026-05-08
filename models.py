@@ -123,7 +123,7 @@ class Event(SQLModel, table=True):
     media_url: Optional[str] = None                # one image url
     event_date: Optional[str] = Field(default=None, index=True)
     announcement_url: Optional[str] = None
-    live_url: Optional[str] = None
+    live_urls: str = Field(default="")             # comma-separated live stream urls
     
     # participants
     authors: List[Author] = Relationship(

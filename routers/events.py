@@ -58,9 +58,12 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
     # ensure tags come back as list
     obj["tags"] = _safe_parse_tags(getattr(ev, "tags_json", "[]"))
 
+    # ensure live_urls comes back as list
+    raw = getattr(ev, "live_urls", "") or ""
+    obj["live_urls"] = [u.strip() for u in raw.split(",") if u.strip()]
+
     # ensure these always present in response
     obj["announcement_url"] = getattr(ev, "announcement_url", None)
-    obj["live_url"] = getattr(ev, "live_url", None)  
 
     obj["authors"] = [
         {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
@@ -101,7 +104,7 @@ class EventCreate(BaseModel):
     media_url: Optional[str] = None
     event_date: Optional[str] = None  # YYYY-MM-DD
     announcement_url: Optional[str] = None
-    live_url: Optional[str] = None          
+    live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
 
 
@@ -113,7 +116,7 @@ class EventUpdate(BaseModel):
     media_url: Optional[str] = None
     event_date: Optional[str] = None
     announcement_url: Optional[str] = None
-    live_url: Optional[str] = None          
+    live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
 
 
@@ -179,7 +182,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         media_url=(payload.media_url.strip() if payload.media_url else None),
         event_date=(payload.event_date.strip() if payload.event_date else None),
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
-        live_url=(payload.live_url.strip() if payload.live_url else None),  
+        live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
     )
 
     session.add(ev)
@@ -228,8 +231,8 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if payload.announcement_url is not None:
         ev.announcement_url = payload.announcement_url.strip() or None
 
-    if payload.live_url is not None:  
-        ev.live_url = payload.live_url.strip() or None
+    if payload.live_urls is not None:
+        ev.live_urls = ",".join(u.strip() for u in payload.live_urls if u.strip())
 
     session.add(ev)
     session.commit()
