@@ -6,6 +6,7 @@ import json
 from database import get_session
 from models import Event, Author, EventAuthorLink
 from middleware.auth import require_admin
+from constants import EVENT_CATEGORIES
 
 router = APIRouter(prefix="/events", tags=["Events"])
 
@@ -96,10 +97,14 @@ def _ensure_authors_exist(session: Session, author_ids: List[int]) -> List[Autho
 from pydantic import BaseModel
 
 
+VALID_CATEGORIES = set(EVENT_CATEGORIES)
+
+
 class EventCreate(BaseModel):
     name: str
     location: Optional[str] = None
     keyword: Optional[str] = None
+    category: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     event_date: Optional[str] = None  # YYYY-MM-DD
@@ -112,12 +117,21 @@ class EventUpdate(BaseModel):
     name: Optional[str] = None
     location: Optional[str] = None
     keyword: Optional[str] = None
+    category: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     event_date: Optional[str] = None
     announcement_url: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
+
+
+# ----------------------------
+# GET CATEGORIES
+# ----------------------------
+@router.get("/categories")
+def list_categories():
+    return {"categories": EVENT_CATEGORIES}
 
 
 # ----------------------------
@@ -130,6 +144,7 @@ def list_events(
     limit: int = 10,
     keyword: Optional[str] = None,
     tag: Optional[str] = None,
+    category: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(Event)
@@ -140,6 +155,9 @@ def list_events(
     if tag:
         needle = f'"{tag}"'
         query = query.where(Event.tags_json.contains(needle))
+
+    if category:
+        query = query.where(Event.category == category.strip().lower())
 
     if sort == "oldest":
         query = query.order_by(Event.event_date, Event.id)
@@ -174,10 +192,15 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
 
     authors = _ensure_authors_exist(session, payload.author_ids or [])
 
+    category = (payload.category.strip().lower() if payload.category else None)
+    if category and category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+
     ev = Event(
         name=name,
         location=(payload.location.strip() if payload.location else None),
         keyword=(payload.keyword.strip() if payload.keyword else None),
+        category=category,
         tags_json=_safe_dump_tags(payload.tags),
         media_url=(payload.media_url.strip() if payload.media_url else None),
         event_date=(payload.event_date.strip() if payload.event_date else None),
@@ -218,6 +241,12 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
 
     if payload.keyword is not None:
         ev.keyword = payload.keyword.strip() or None
+
+    if payload.category is not None:
+        cat = payload.category.strip().lower() or None
+        if cat and cat not in VALID_CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+        ev.category = cat
 
     if payload.media_url is not None:
         ev.media_url = payload.media_url.strip() or None

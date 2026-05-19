@@ -119,6 +119,7 @@ class Event(SQLModel, table=True):
     location: Optional[str] = None                 # optional
     keyword: Optional[str] = Field(default=None, index=True)
 
+    category: Optional[str] = Field(default=None, index=True)  # e.g. program, live, interview, event, fan meet
     tags_json: str = Field(default="[]")           # list[str] stored as JSON
     media_url: Optional[str] = None                # one image url
     event_date: Optional[str] = Field(default=None, index=True)
