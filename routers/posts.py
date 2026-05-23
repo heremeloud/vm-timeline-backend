@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
 from database import get_session
@@ -7,6 +8,19 @@ from middleware.auth import require_admin
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
 
+def _enrich(p: Post, author: Author | None) -> dict:
+    """Return a post dict with author info and parsed media_urls list."""
+    obj = p.dict()
+    obj["author_name"] = author.name if author else None
+    obj["author_photo"] = author.profile_photo_url if author else None
+    # Parse stored JSON array; fall back to [] on bad data
+    try:
+        obj["media_urls"] = json.loads(p.media_urls_json or "[]")
+    except Exception:
+        obj["media_urls"] = []
+    return obj
+
+
 @router.get("/{post_id}")
 def get_post(post_id: int, session: Session = Depends(get_session)):
     post = session.get(Post, post_id)
@@ -14,10 +28,7 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Post not found")
 
     author = session.get(Author, post.author_id) if post.author_id else None
-    obj = post.dict()
-    obj["author_name"] = author.name if author else None
-    obj["author_photo"] = author.profile_photo_url if author else None
-    return {"post": obj}
+    return {"post": _enrich(post, author)}
 
 # -----------------------------
 # CREATE MAIN POST (IG or X)
@@ -62,12 +73,7 @@ def get_posts(
     enriched = []
     for p in posts:
         author = session.get(Author, p.author_id) if p.author_id else None
-
-        obj = p.dict()
-        obj["author_name"] = author.name if author else None
-        obj["author_photo"] = author.profile_photo_url if author else None
-
-        enriched.append(obj)
+        enriched.append(_enrich(p, author))
 
     return enriched
 
@@ -123,12 +129,7 @@ def get_thread(post_id: int, session: Session = Depends(get_session)):
     enriched = []
     for r in replies:
         author = session.get(Author, r.author_id) if r.author_id else None
-
-        rd = r.dict()
-        rd["author_name"] = author.name if author else None
-        rd["author_photo"] = author.profile_photo_url if author else None
-
-        enriched.append(rd)
+        enriched.append(_enrich(r, author))
 
     return enriched
 

@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import create_db_and_tables
+from database import create_db_and_tables, run_migrations
 
 # Routers
 from routers import posts, texts, authors, events  
@@ -21,6 +21,7 @@ app = FastAPI(title="VM Social Timeline API")
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    run_migrations()
 
 
 # ---------------------------------------------------------

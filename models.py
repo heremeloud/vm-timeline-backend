@@ -50,6 +50,8 @@ class Post(SQLModel, table=True):
     posted_at: Optional[str] = None
     media_url: Optional[str] = None
 
+    media_urls_json: str = Field(default="[]")  # JSON array of media URLs for story carousels
+
     parent_id: Optional[int] = Field(default=None, foreign_key="post.id")
 
     children: List["Post"] = Relationship(
