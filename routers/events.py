@@ -142,12 +142,16 @@ def list_events(
     sort: str = "newest",
     offset: int = 0,
     limit: int = 10,
+    name: Optional[str] = None,
     keyword: Optional[str] = None,
     tag: Optional[str] = None,
     category: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(Event)
+
+    if name:
+        query = query.where(Event.name.ilike(f"%{name.strip()}%"))
 
     if keyword:
         query = query.where(Event.keyword == keyword)
