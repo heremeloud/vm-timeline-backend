@@ -2,6 +2,16 @@ from sqlmodel import SQLModel, Field, Relationship
 from typing import Optional, List
 
 
+# ---------- LINK TABLE: Project <-> Author (many-to-many) ----------
+class ProjectAuthorLink(SQLModel, table=True):
+    project_id: Optional[int] = Field(
+        default=None, foreign_key="project.id", primary_key=True
+    )
+    author_id: Optional[int] = Field(
+        default=None, foreign_key="author.id", primary_key=True
+    )
+
+
 # ---------- LINK TABLE: Event <-> Author (many-to-many) ----------
 class EventAuthorLink(SQLModel, table=True):
     event_id: Optional[int] = Field(
@@ -29,6 +39,12 @@ class Author(SQLModel, table=True):
     events: List["Event"] = Relationship(
         back_populates="authors",
         link_model=EventAuthorLink,
+    )
+
+    # projects this author participates in
+    projects: List["Project"] = Relationship(
+        back_populates="authors",
+        link_model=ProjectAuthorLink,
     )
 
 
@@ -113,6 +129,34 @@ class PostText(SQLModel, table=True):
         return self.author_obj.profile_photo_url if self.author_obj else None
 
 
+# ============================================================
+# PROJECT TABLE — series, concerts, movies, variety shows
+# ============================================================
+class Project(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    title: str = Field(index=True)
+    original_title: Optional[str] = None          # Thai title
+    category: Optional[str] = Field(default=None, index=True)  # series, concert, movie, variety
+    thumbnail_url: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    playlist_id: Optional[str] = None             # legacy single playlist ID (kept for compat)
+    playlists_json: str = Field(default="[]")     # JSON array of YouTube playlist IDs
+    announcement_url: Optional[str] = None        # official announcement link
+    tweet_url: Optional[str] = None               # tweet with media (teaser, promo, etc.)
+    mydramalist_url: Optional[str] = None         # MyDramaList page URL
+    start_date: Optional[str] = None              # YYYY-MM-DD
+    end_date: Optional[str] = None                # YYYY-MM-DD (optional, for ranges)
+
+    authors: List[Author] = Relationship(
+        back_populates="projects",
+        link_model=ProjectAuthorLink,
+    )
+
+    events: List["Event"] = Relationship(back_populates="project")
+
+
 # ---------- EVENT TABLE ----------
 class Event(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -127,9 +171,13 @@ class Event(SQLModel, table=True):
     event_date: Optional[str] = Field(default=None, index=True)
     announcement_url: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls
-    
+
+    project_id: Optional[int] = Field(default=None, foreign_key="project.id")
+
     # participants
     authors: List[Author] = Relationship(
         back_populates="events",
         link_model=EventAuthorLink,
     )
+
+    project: Optional["Project"] = Relationship(back_populates="events")

@@ -65,6 +65,7 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
 
     # ensure these always present in response
     obj["announcement_url"] = getattr(ev, "announcement_url", None)
+    obj["project_id"] = getattr(ev, "project_id", None)
 
     obj["authors"] = [
         {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
@@ -111,6 +112,7 @@ class EventCreate(BaseModel):
     announcement_url: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
+    project_id: Optional[int] = None
 
 
 class EventUpdate(BaseModel):
@@ -124,6 +126,7 @@ class EventUpdate(BaseModel):
     announcement_url: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
+    project_id: Optional[int] = None
 
 
 # ----------------------------
@@ -210,6 +213,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         event_date=(payload.event_date.strip() if payload.event_date else None),
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
         live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
+        project_id=payload.project_id,
     )
 
     session.add(ev)
@@ -266,6 +270,11 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
 
     if payload.live_urls is not None:
         ev.live_urls = ",".join(u.strip() for u in payload.live_urls if u.strip())
+
+    if payload.project_id is not None:
+        ev.project_id = payload.project_id
+    elif hasattr(payload, "project_id") and "project_id" in payload.model_fields_set:
+        ev.project_id = None  # explicitly cleared
 
     session.add(ev)
     session.commit()

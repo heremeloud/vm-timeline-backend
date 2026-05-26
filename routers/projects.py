@@ -1,0 +1,263 @@
+import json
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select, desc
+from typing import Optional, List, Any, Dict
+from pydantic import BaseModel
+
+from database import get_session
+from models import Project, Author, ProjectAuthorLink
+from middleware.auth import require_admin
+from constants import PROJECT_CATEGORIES
+
+router = APIRouter(prefix="/projects", tags=["Projects"])
+
+VALID_CATEGORIES = set(PROJECT_CATEGORIES)
+
+
+# ----------------------------
+# Helpers
+# ----------------------------
+
+def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
+    links = session.exec(
+        select(ProjectAuthorLink).where(ProjectAuthorLink.project_id == p.id)
+    ).all()
+    author_ids = [l.author_id for l in links if l.author_id is not None]
+
+    authors = []
+    if author_ids:
+        rows = session.exec(select(Author).where(Author.id.in_(author_ids))).all()
+        by_id = {a.id: a for a in rows}
+        authors = [by_id[i] for i in author_ids if i in by_id]
+
+    # Build playlists array: new playlists_json + legacy playlist_id fallback
+    try:
+        playlists = json.loads(p.playlists_json or "[]")
+    except Exception:
+        playlists = []
+    if p.playlist_id and p.playlist_id not in playlists:
+        playlists = [p.playlist_id] + playlists
+
+    obj = p.dict()
+    obj["playlists"] = playlists
+    obj["authors"] = [
+        {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
+        for a in authors
+    ]
+    return obj
+
+
+def _ensure_authors(session: Session, author_ids: List[int]) -> List[Author]:
+    if not author_ids:
+        return []
+    uniq = list(dict.fromkeys(author_ids))
+    rows = session.exec(select(Author).where(Author.id.in_(uniq))).all()
+    found = {a.id for a in rows}
+    missing = [i for i in uniq if i not in found]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown author_id(s): {missing}")
+    by_id = {a.id: a for a in rows}
+    return [by_id[i] for i in uniq]
+
+
+# ----------------------------
+# Schemas
+# ----------------------------
+
+class ProjectCreate(BaseModel):
+    title: str
+    original_title: Optional[str] = None
+    category: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    playlist_ids: Optional[List[str]] = None   # list of YouTube playlist IDs
+    announcement_url: Optional[str] = None
+    tweet_url: Optional[str] = None
+    mydramalist_url: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    author_ids: Optional[List[int]] = None
+
+
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    original_title: Optional[str] = None
+    category: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    year: Optional[int] = None
+    description: Optional[str] = None
+    playlist_ids: Optional[List[str]] = None   # list of YouTube playlist IDs
+    announcement_url: Optional[str] = None
+    tweet_url: Optional[str] = None
+    mydramalist_url: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    author_ids: Optional[List[int]] = None
+
+
+# ----------------------------
+# GET categories
+# ----------------------------
+
+@router.get("/categories")
+def list_categories():
+    return {"categories": PROJECT_CATEGORIES}
+
+
+# ----------------------------
+# GET list
+# ----------------------------
+
+@router.get("/")
+def list_projects(
+    sort: str = "newest",
+    category: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    query = select(Project)
+
+    if category:
+        query = query.where(Project.category == category.strip().lower())
+
+    if sort == "oldest":
+        query = query.order_by(Project.year, Project.id)
+    else:
+        query = query.order_by(desc(Project.year), desc(Project.id))
+
+    projects = session.exec(query).all()
+    return [_serialize_project(session, p) for p in projects]
+
+
+# ----------------------------
+# GET one
+# ----------------------------
+
+@router.get("/{project_id}")
+def get_project(project_id: int, session: Session = Depends(get_session)):
+    p = session.get(Project, project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"project": _serialize_project(session, p)}
+
+
+# ----------------------------
+# CREATE
+# ----------------------------
+
+@router.post("/", dependencies=[Depends(require_admin)])
+def create_project(payload: ProjectCreate, session: Session = Depends(get_session)):
+    title = (payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    category = payload.category.strip().lower() if payload.category else None
+    if category and category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+
+    authors = _ensure_authors(session, payload.author_ids or [])
+
+    playlist_ids = [pid.strip() for pid in (payload.playlist_ids or []) if pid.strip()]
+
+    p = Project(
+        title=title,
+        original_title=(payload.original_title.strip() if payload.original_title else None),
+        category=category,
+        thumbnail_url=(payload.thumbnail_url.strip() if payload.thumbnail_url else None),
+        year=payload.year,
+        description=(payload.description.strip() if payload.description else None),
+        playlists_json=json.dumps(playlist_ids),
+        announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
+        tweet_url=(payload.tweet_url.strip() if payload.tweet_url else None),
+        mydramalist_url=(payload.mydramalist_url.strip() if payload.mydramalist_url else None),
+        start_date=(payload.start_date.strip() if payload.start_date else None),
+        end_date=(payload.end_date.strip() if payload.end_date else None),
+    )
+    session.add(p)
+    session.commit()
+    session.refresh(p)
+
+    for a in authors:
+        session.add(ProjectAuthorLink(project_id=p.id, author_id=a.id))
+    session.commit()
+
+    return _serialize_project(session, p)
+
+
+# ----------------------------
+# UPDATE
+# ----------------------------
+
+@router.patch("/{project_id}", dependencies=[Depends(require_admin)])
+def update_project(project_id: int, payload: ProjectUpdate, session: Session = Depends(get_session)):
+    p = session.get(Project, project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if payload.title is not None:
+        t = payload.title.strip()
+        if not t:
+            raise HTTPException(status_code=400, detail="Title cannot be empty")
+        p.title = t
+
+    if payload.category is not None:
+        cat = payload.category.strip().lower() or None
+        if cat and cat not in VALID_CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+        p.category = cat
+
+    if payload.original_title is not None:
+        p.original_title = payload.original_title.strip() or None
+    if payload.thumbnail_url is not None:
+        p.thumbnail_url = payload.thumbnail_url.strip() or None
+    if payload.year is not None:
+        p.year = payload.year
+    if payload.description is not None:
+        p.description = payload.description.strip() or None
+    if payload.playlist_ids is not None:
+        playlist_ids = [pid.strip() for pid in payload.playlist_ids if pid.strip()]
+        p.playlists_json = json.dumps(playlist_ids)
+    if payload.announcement_url is not None:
+        p.announcement_url = payload.announcement_url.strip() or None
+    if payload.tweet_url is not None:
+        p.tweet_url = payload.tweet_url.strip() or None
+    if payload.mydramalist_url is not None:
+        p.mydramalist_url = payload.mydramalist_url.strip() or None
+    if payload.start_date is not None:
+        p.start_date = payload.start_date.strip() or None
+    if payload.end_date is not None:
+        p.end_date = payload.end_date.strip() or None
+
+    session.add(p)
+    session.commit()
+    session.refresh(p)
+
+    if payload.author_ids is not None:
+        old = session.exec(select(ProjectAuthorLink).where(ProjectAuthorLink.project_id == project_id)).all()
+        for l in old:
+            session.delete(l)
+        session.commit()
+        for a in _ensure_authors(session, payload.author_ids):
+            session.add(ProjectAuthorLink(project_id=project_id, author_id=a.id))
+        session.commit()
+
+    return _serialize_project(session, p)
+
+
+# ----------------------------
+# DELETE
+# ----------------------------
+
+@router.delete("/{project_id}", dependencies=[Depends(require_admin)])
+def delete_project(project_id: int, session: Session = Depends(get_session)):
+    p = session.get(Project, project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    links = session.exec(select(ProjectAuthorLink).where(ProjectAuthorLink.project_id == project_id)).all()
+    for l in links:
+        session.delete(l)
+
+    session.delete(p)
+    session.commit()
+    return {"status": "deleted", "id": project_id}

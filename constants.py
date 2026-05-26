@@ -15,3 +15,12 @@ EVENT_CATEGORIES: list[str] = [
     "fan fest",
     "fan sign",
 ]
+
+PROJECT_CATEGORIES: list[str] = [
+    "series",
+    "concert",
+    "movie",
+    "variety",
+    "music video",
+    "other",
+]
