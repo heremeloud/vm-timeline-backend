@@ -176,6 +176,7 @@ class Event(SQLModel, table=True):
     live_urls: str = Field(default="")             # comma-separated live stream urls
 
     project_id: Optional[int] = Field(default=None, foreign_key="project.id")
+    parent_event_id: Optional[int] = Field(default=None, foreign_key="event.id")
 
     # participants
     authors: List[Author] = Relationship(

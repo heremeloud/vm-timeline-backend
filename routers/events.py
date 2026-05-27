@@ -72,6 +72,24 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
         for a in authors
     ]
 
+    # Parent press tour info
+    if ev.parent_event_id:
+        parent_ev = session.get(Event, ev.parent_event_id)
+        obj["parent_event_id"] = ev.parent_event_id
+        obj["parent_event_name"] = parent_ev.name if parent_ev else None
+    else:
+        obj["parent_event_id"] = None
+        obj["parent_event_name"] = None
+
+    # Child events (interviews inside a press tour)
+    children = session.exec(
+        select(Event).where(Event.parent_event_id == ev.id).order_by(Event.event_date, Event.id)
+    ).all()
+    obj["child_events"] = [
+        {"id": c.id, "name": c.name, "event_date": c.event_date, "category": c.category}
+        for c in children
+    ]
+
     # Attach linked project info if present
     if ev.project_id:
         proj = session.get(Project, ev.project_id)
@@ -125,6 +143,7 @@ class EventCreate(BaseModel):
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
+    parent_event_id: Optional[int] = None
 
 
 class EventUpdate(BaseModel):
@@ -139,6 +158,7 @@ class EventUpdate(BaseModel):
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
+    parent_event_id: Optional[int] = None
 
 
 # ----------------------------
@@ -226,6 +246,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
         live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
         project_id=payload.project_id,
+        parent_event_id=payload.parent_event_id,
     )
 
     session.add(ev)
@@ -287,6 +308,11 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
         ev.project_id = payload.project_id
     elif hasattr(payload, "project_id") and "project_id" in payload.model_fields_set:
         ev.project_id = None  # explicitly cleared
+
+    if payload.parent_event_id is not None:
+        ev.parent_event_id = payload.parent_event_id
+    elif hasattr(payload, "parent_event_id") and "parent_event_id" in payload.model_fields_set:
+        ev.parent_event_id = None  # explicitly cleared
 
     session.add(ev)
     session.commit()

@@ -46,6 +46,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added project_id to event")
 
+        if "parent_event_id" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN parent_event_id INTEGER REFERENCES event(id)"))
+            conn.commit()
+            print("Migration: added parent_event_id to event")
+
         # ── project table ────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols = {row[1] for row in result}
