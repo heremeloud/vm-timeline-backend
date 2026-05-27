@@ -143,12 +143,16 @@ class Project(SQLModel, table=True):
     thumbnail_url: Optional[str] = None
     year: Optional[int] = None
     description: Optional[str] = None
+    parent_project_id: Optional[int] = Field(default=None, foreign_key="project.id")
     playlist_id: Optional[str] = None             # legacy single playlist ID (kept for compat)
     playlists_json: str = Field(default="[]")     # JSON array of YouTube playlist IDs
     announcement_url: Optional[str] = None        # official announcement link
     tweet_url: Optional[str] = None               # tweet with media (teaser, promo, etc.)
+    youtube_url: Optional[str] = None             # single YouTube video URL
     mydramalist_url: Optional[str] = None         # MyDramaList page URL
     gmmtv_url: Optional[str] = None              # GMMTV official site URL
+    spotify_url: Optional[str] = None             # Spotify album/track URL
+    apple_music_url: Optional[str] = None         # Apple Music album/track URL
     start_date: Optional[str] = None              # YYYY-MM-DD
     end_date: Optional[str] = None                # YYYY-MM-DD (optional, for ranges)
 

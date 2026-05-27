@@ -1,6 +1,7 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
+from sqlalchemy import case, nullslast, nullsfirst
 from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
@@ -65,8 +66,28 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
         {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
         for a in authors
     ]
+    obj["youtube_url"] = p.youtube_url
+    obj["spotify_url"] = p.spotify_url
+    obj["apple_music_url"] = p.apple_music_url
+
+    # Parent project
+    parent_project = None
+    if p.parent_project_id:
+        pp = session.get(Project, p.parent_project_id)
+        if pp:
+            parent_project = {"id": pp.id, "title": pp.title, "thumbnail_url": pp.thumbnail_url, "category": pp.category}
+    obj["parent_project_id"] = p.parent_project_id
+    obj["parent_project"] = parent_project
+
+    # Child projects
+    children = session.exec(select(Project).where(Project.parent_project_id == p.id)).all()
+    obj["child_projects"] = [
+        {"id": c.id, "title": c.title, "thumbnail_url": c.thumbnail_url, "category": c.category}
+        for c in children
+    ]
+
     obj["events"] = [
-        {"id": e.id, "name": e.name, "event_date": e.event_date, "category": e.category}
+        {"id": e.id, "name": e.name, "event_date": e.event_date, "category": e.category, "parent_event_id": e.parent_event_id}
         for e in linked_events
     ]
     return obj
@@ -99,8 +120,12 @@ class ProjectCreate(BaseModel):
     playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
     announcement_url: Optional[str] = None
     tweet_url: Optional[str] = None
+    youtube_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    spotify_url: Optional[str] = None
+    apple_music_url: Optional[str] = None
+    parent_project_id: Optional[int] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     author_ids: Optional[List[int]] = None
@@ -116,8 +141,12 @@ class ProjectUpdate(BaseModel):
     playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
     announcement_url: Optional[str] = None
     tweet_url: Optional[str] = None
+    youtube_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    spotify_url: Optional[str] = None
+    apple_music_url: Optional[str] = None
+    parent_project_id: Optional[int] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     author_ids: Optional[List[int]] = None
@@ -148,9 +177,9 @@ def list_projects(
         query = query.where(Project.category == category.strip().lower())
 
     if sort == "oldest":
-        query = query.order_by(Project.year, Project.id)
+        query = query.order_by(nullslast(Project.start_date.asc()), Project.id.asc())
     else:
-        query = query.order_by(desc(Project.year), desc(Project.id))
+        query = query.order_by(nullsfirst(Project.start_date.desc()), Project.id.desc())
 
     projects = session.exec(query).all()
     return [_serialize_project(session, p) for p in projects]
@@ -203,8 +232,12 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         playlists_json=json.dumps(playlist_objs),
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
         tweet_url=(payload.tweet_url.strip() if payload.tweet_url else None),
+        youtube_url=(payload.youtube_url.strip() if payload.youtube_url else None),
         mydramalist_url=(payload.mydramalist_url.strip() if payload.mydramalist_url else None),
         gmmtv_url=(payload.gmmtv_url.strip() if payload.gmmtv_url else None),
+        spotify_url=(payload.spotify_url.strip() if payload.spotify_url else None),
+        apple_music_url=(payload.apple_music_url.strip() if payload.apple_music_url else None),
+        parent_project_id=payload.parent_project_id or None,
         start_date=(payload.start_date.strip() if payload.start_date else None),
         end_date=(payload.end_date.strip() if payload.end_date else None),
     )
@@ -261,10 +294,18 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.announcement_url = payload.announcement_url.strip() or None
     if payload.tweet_url is not None:
         p.tweet_url = payload.tweet_url.strip() or None
+    if payload.youtube_url is not None:
+        p.youtube_url = payload.youtube_url.strip() or None
     if payload.mydramalist_url is not None:
         p.mydramalist_url = payload.mydramalist_url.strip() or None
     if payload.gmmtv_url is not None:
         p.gmmtv_url = payload.gmmtv_url.strip() or None
+    if payload.spotify_url is not None:
+        p.spotify_url = payload.spotify_url.strip() or None
+    if payload.apple_music_url is not None:
+        p.apple_music_url = payload.apple_music_url.strip() or None
+    if payload.parent_project_id is not None:
+        p.parent_project_id = payload.parent_project_id or None
     if payload.start_date is not None:
         p.start_date = payload.start_date.strip() or None
     if payload.end_date is not None:
