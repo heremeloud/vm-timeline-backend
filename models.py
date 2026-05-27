@@ -62,6 +62,7 @@ class Post(SQLModel, table=True):
 
     caption: Optional[str] = None
     caption_translation: Optional[str] = None
+    caption_translation_note: Optional[str] = None   # optional translator's note
 
     posted_at: Optional[str] = None
     media_url: Optional[str] = None
@@ -112,6 +113,7 @@ class PostText(SQLModel, table=True):
     content: str
     posted_at: Optional[str] = None
     media_url: Optional[str] = None
+    note: Optional[str] = None     # optional translator's note (for translation rows)
 
     parent_comment_id: Optional[int] = Field(
         default=None, foreign_key="posttext.id"
@@ -146,6 +148,7 @@ class Project(SQLModel, table=True):
     announcement_url: Optional[str] = None        # official announcement link
     tweet_url: Optional[str] = None               # tweet with media (teaser, promo, etc.)
     mydramalist_url: Optional[str] = None         # MyDramaList page URL
+    gmmtv_url: Optional[str] = None              # GMMTV official site URL
     start_date: Optional[str] = None              # YYYY-MM-DD
     end_date: Optional[str] = None                # YYYY-MM-DD (optional, for ranges)
 

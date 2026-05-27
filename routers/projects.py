@@ -5,7 +5,7 @@ from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
 from database import get_session
-from models import Project, Author, ProjectAuthorLink
+from models import Project, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
 from constants import PROJECT_CATEGORIES
 
@@ -30,19 +30,44 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
         by_id = {a.id: a for a in rows}
         authors = [by_id[i] for i in author_ids if i in by_id]
 
-    # Build playlists array: new playlists_json + legacy playlist_id fallback
+    # Build playlists array: normalize to {name?, id} objects
     try:
-        playlists = json.loads(p.playlists_json or "[]")
+        raw = json.loads(p.playlists_json or "[]")
     except Exception:
-        playlists = []
-    if p.playlist_id and p.playlist_id not in playlists:
-        playlists = [p.playlist_id] + playlists
+        raw = []
+
+    playlists = []
+    seen_ids = set()
+    for entry in raw:
+        if isinstance(entry, str) and entry.strip():
+            pid = entry.strip()
+            if pid not in seen_ids:
+                playlists.append({"id": pid})
+                seen_ids.add(pid)
+        elif isinstance(entry, dict) and entry.get("id"):
+            pid = entry["id"]
+            if pid not in seen_ids:
+                playlists.append(entry)
+                seen_ids.add(pid)
+
+    # Legacy playlist_id field
+    if p.playlist_id and p.playlist_id not in seen_ids:
+        playlists = [{"id": p.playlist_id}] + playlists
+
+    # Linked events
+    linked_events = session.exec(
+        select(Event).where(Event.project_id == p.id).order_by(Event.event_date)
+    ).all()
 
     obj = p.dict()
     obj["playlists"] = playlists
     obj["authors"] = [
         {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
         for a in authors
+    ]
+    obj["events"] = [
+        {"id": e.id, "name": e.name, "event_date": e.event_date, "category": e.category}
+        for e in linked_events
     ]
     return obj
 
@@ -71,10 +96,11 @@ class ProjectCreate(BaseModel):
     thumbnail_url: Optional[str] = None
     year: Optional[int] = None
     description: Optional[str] = None
-    playlist_ids: Optional[List[str]] = None   # list of YouTube playlist IDs
+    playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
     announcement_url: Optional[str] = None
     tweet_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
+    gmmtv_url: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     author_ids: Optional[List[int]] = None
@@ -87,10 +113,11 @@ class ProjectUpdate(BaseModel):
     thumbnail_url: Optional[str] = None
     year: Optional[int] = None
     description: Optional[str] = None
-    playlist_ids: Optional[List[str]] = None   # list of YouTube playlist IDs
+    playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
     announcement_url: Optional[str] = None
     tweet_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
+    gmmtv_url: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     author_ids: Optional[List[int]] = None
@@ -157,7 +184,14 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
 
     authors = _ensure_authors(session, payload.author_ids or [])
 
-    playlist_ids = [pid.strip() for pid in (payload.playlist_ids or []) if pid.strip()]
+    # Normalize playlists: accept both plain strings and {name, id} dicts
+    raw_playlists = payload.playlist_ids or []
+    playlist_objs = []
+    for entry in raw_playlists:
+        if isinstance(entry, str) and entry.strip():
+            playlist_objs.append({"id": entry.strip()})
+        elif isinstance(entry, dict) and entry.get("id"):
+            playlist_objs.append(entry)
 
     p = Project(
         title=title,
@@ -166,10 +200,11 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         thumbnail_url=(payload.thumbnail_url.strip() if payload.thumbnail_url else None),
         year=payload.year,
         description=(payload.description.strip() if payload.description else None),
-        playlists_json=json.dumps(playlist_ids),
+        playlists_json=json.dumps(playlist_objs),
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
         tweet_url=(payload.tweet_url.strip() if payload.tweet_url else None),
         mydramalist_url=(payload.mydramalist_url.strip() if payload.mydramalist_url else None),
+        gmmtv_url=(payload.gmmtv_url.strip() if payload.gmmtv_url else None),
         start_date=(payload.start_date.strip() if payload.start_date else None),
         end_date=(payload.end_date.strip() if payload.end_date else None),
     )
@@ -215,14 +250,21 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
     if payload.description is not None:
         p.description = payload.description.strip() or None
     if payload.playlist_ids is not None:
-        playlist_ids = [pid.strip() for pid in payload.playlist_ids if pid.strip()]
-        p.playlists_json = json.dumps(playlist_ids)
+        playlist_objs = []
+        for entry in payload.playlist_ids:
+            if isinstance(entry, str) and entry.strip():
+                playlist_objs.append({"id": entry.strip()})
+            elif isinstance(entry, dict) and entry.get("id"):
+                playlist_objs.append(entry)
+        p.playlists_json = json.dumps(playlist_objs)
     if payload.announcement_url is not None:
         p.announcement_url = payload.announcement_url.strip() or None
     if payload.tweet_url is not None:
         p.tweet_url = payload.tweet_url.strip() or None
     if payload.mydramalist_url is not None:
         p.mydramalist_url = payload.mydramalist_url.strip() or None
+    if payload.gmmtv_url is not None:
+        p.gmmtv_url = payload.gmmtv_url.strip() or None
     if payload.start_date is not None:
         p.start_date = payload.start_date.strip() or None
     if payload.end_date is not None:

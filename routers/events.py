@@ -4,7 +4,7 @@ from typing import Optional, List, Any, Dict
 import json
 
 from database import get_session
-from models import Event, Author, EventAuthorLink
+from models import Event, Author, EventAuthorLink, Project
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES
 
@@ -71,6 +71,18 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
         {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
         for a in authors
     ]
+
+    # Attach linked project info if present
+    if ev.project_id:
+        proj = session.get(Project, ev.project_id)
+        obj["project_title"] = proj.title if proj else None
+        obj["project_thumbnail_url"] = proj.thumbnail_url if proj else None
+        obj["project_category"] = proj.category if proj else None
+    else:
+        obj["project_title"] = None
+        obj["project_thumbnail_url"] = None
+        obj["project_category"] = None
+
     return obj
 
 

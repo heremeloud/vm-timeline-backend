@@ -23,6 +23,20 @@ def run_migrations():
             conn.commit()
             print("Migration: added media_urls_json to post")
 
+        if "caption_translation_note" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN caption_translation_note VARCHAR"))
+            conn.commit()
+            print("Migration: added caption_translation_note to post")
+
+        # ── posttext table ──────────────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(posttext)"))
+        posttext_cols = {row[1] for row in result}
+
+        if "note" not in posttext_cols:
+            conn.execute(text("ALTER TABLE posttext ADD COLUMN note VARCHAR"))
+            conn.commit()
+            print("Migration: added note to posttext")
+
         # ── event table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(event)"))
         event_cols = {row[1] for row in result}
@@ -70,6 +84,11 @@ def run_migrations():
             conn.execute(text("ALTER TABLE project ADD COLUMN mydramalist_url VARCHAR"))
             conn.commit()
             print("Migration: added mydramalist_url to project")
+
+        if "gmmtv_url" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN gmmtv_url VARCHAR"))
+            conn.commit()
+            print("Migration: added gmmtv_url to project")
 
 def get_session():
     with Session(engine) as session:

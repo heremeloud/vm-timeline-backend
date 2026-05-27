@@ -111,6 +111,7 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
 
     new_trans = payload.get("translation")
     new_lang = payload.get("translation_language", "en")
+    new_note = payload.get("note", None)  # optional translator's note
 
     # If translation was removed
     if new_trans is None or new_trans.strip() == "":
@@ -122,6 +123,7 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
             child.type = translation_type
             child.language = new_lang
             child.author_id = parent.author_id
+            child.note = new_note if new_note and new_note.strip() else None
         else:
             new_child = PostText(
                 post_id=parent.post_id,
@@ -130,6 +132,7 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
                 content=new_trans,
                 parent_comment_id=text_id,
                 author_id=parent.author_id,
+                note=new_note if new_note and new_note.strip() else None,
             )
             session.add(new_child)
 
