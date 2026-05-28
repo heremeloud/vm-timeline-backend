@@ -29,7 +29,14 @@ class Author(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     name: str = Field(index=True, unique=True)
+    full_name: Optional[str] = None          # full legal/stage name
     profile_photo_url: Optional[str] = None
+    birthday: Optional[str] = None           # e.g. "2000-03-15"
+    twitter_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    tiktok_url: Optional[str] = None
+    gmmtv_url: Optional[str] = None
+    fc_url: Optional[str] = None             # official fan club URL
 
     # Relationships
     posts: List["Post"] = Relationship(back_populates="author_obj")

@@ -2,9 +2,11 @@
 from dotenv import load_dotenv
 load_dotenv()  
 from middleware import auth
+import os
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from database import create_db_and_tables, run_migrations
 
@@ -18,6 +20,10 @@ app = FastAPI(title="VM Social Timeline API")
 # ---------------------------------------------------------
 # Startup Event
 # ---------------------------------------------------------
+UPLOAD_DIR = "uploads"
+os.makedirs(os.path.join(UPLOAD_DIR, "authors"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
+
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()

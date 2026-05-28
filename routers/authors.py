@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException, Depends
+import os
+import shutil
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
 from sqlmodel import Session, select
 from database import get_session
 from models import Author
 from middleware.auth import require_admin
+
+UPLOAD_DIR = "uploads/authors"
 
 router = APIRouter(prefix="/authors", tags=["Authors"])
 
@@ -72,6 +76,26 @@ def delete_author(author_id: int, session: Session = Depends(get_session)):
     session.delete(author)
     session.commit()
     return {"message": "Author deleted successfully"}
+
+
+@router.post("/{author_id}/upload-photo", dependencies=[Depends(require_admin)])
+def upload_author_photo(author_id: int, file: UploadFile = File(...), session: Session = Depends(get_session)):
+    author = session.get(Author, author_id)
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+
+    ext = os.path.splitext(file.filename or "")[-1].lower() or ".jpg"
+    filename = f"{author_id}{ext}"
+    filepath = os.path.join(UPLOAD_DIR, filename)
+
+    with open(filepath, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    author.profile_photo_url = f"/static/authors/{filename}"
+    session.add(author)
+    session.commit()
+    session.refresh(author)
+    return author
 
 
 @router.post("/ensure", response_model=Author)

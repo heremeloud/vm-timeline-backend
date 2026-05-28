@@ -95,6 +95,65 @@ def run_migrations():
             conn.commit()
             print("Migration: added gmmtv_url to project")
 
+        if "youtube_url" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN youtube_url VARCHAR"))
+            conn.commit()
+            print("Migration: added youtube_url to project")
+
+        if "spotify_url" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN spotify_url VARCHAR"))
+            conn.commit()
+            print("Migration: added spotify_url to project")
+
+        if "apple_music_url" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN apple_music_url VARCHAR"))
+            conn.commit()
+            print("Migration: added apple_music_url to project")
+
+        if "parent_project_id" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN parent_project_id INTEGER REFERENCES project(id)"))
+            conn.commit()
+            print("Migration: added parent_project_id to project")
+
+        # ── author table ─────────────────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(author)"))
+        author_cols = {row[1] for row in result}
+
+        if "full_name" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN full_name VARCHAR"))
+            conn.commit()
+            print("Migration: added full_name to author")
+
+        if "birthday" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN birthday VARCHAR"))
+            conn.commit()
+            print("Migration: added birthday to author")
+
+        if "twitter_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN twitter_url VARCHAR"))
+            conn.commit()
+            print("Migration: added twitter_url to author")
+
+        if "instagram_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN instagram_url VARCHAR"))
+            conn.commit()
+            print("Migration: added instagram_url to author")
+
+        if "tiktok_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN tiktok_url VARCHAR"))
+            conn.commit()
+            print("Migration: added tiktok_url to author")
+
+        if "gmmtv_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN gmmtv_url VARCHAR"))
+            conn.commit()
+            print("Migration: added gmmtv_url to author")
+
+        if "fc_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN fc_url VARCHAR"))
+            conn.commit()
+            print("Migration: added fc_url to author")
+
 def get_session():
     with Session(engine) as session:
         yield session
