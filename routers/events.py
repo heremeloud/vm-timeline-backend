@@ -181,6 +181,7 @@ def list_events(
     keyword: Optional[str] = None,
     tag: Optional[str] = None,
     category: Optional[str] = None,
+    author: Optional[str] = None,   # "view", "mim", or "viewmim"
     session: Session = Depends(get_session),
 ):
     query = select(Event)
@@ -197,6 +198,27 @@ def list_events(
 
     if category:
         query = query.where(Event.category == category.strip().lower())
+
+    if author:
+        author_lower = author.strip().lower()
+        view = session.exec(select(Author).where(Author.name.ilike("view"))).first()
+        mim  = session.exec(select(Author).where(Author.name.ilike("mim"))).first()
+        view_event_ids = {l.event_id for l in session.exec(select(EventAuthorLink).where(EventAuthorLink.author_id == view.id)).all()} if view else set()
+        mim_event_ids  = {l.event_id for l in session.exec(select(EventAuthorLink).where(EventAuthorLink.author_id == mim.id)).all()} if mim else set()
+
+        if author_lower == "viewmim":
+            # Events with BOTH View and Mim (couple events)
+            allowed = list(view_event_ids & mim_event_ids)
+        elif author_lower == "view":
+            # Events with View but NOT Mim (solo View)
+            allowed = list(view_event_ids - mim_event_ids)
+        elif author_lower == "mim":
+            # Events with Mim but NOT View (solo Mim)
+            allowed = list(mim_event_ids - view_event_ids)
+        else:
+            allowed = []
+
+        query = query.where(Event.id.in_(allowed)) if allowed else query.where(Event.id == -1)
 
     if sort == "oldest":
         query = query.order_by(Event.event_date, Event.id)
