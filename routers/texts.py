@@ -54,7 +54,7 @@ def get_by_post(post_id: int, session: Session = Depends(get_session)):
 
 
 # ---------------------------------
-# DELETE COMMENT PAIR (main + translation)
+# DELETE COMMENT (and any legacy translation children)
 # ---------------------------------
 @router.delete("/pair/{text_id}", dependencies=[Depends(require_admin)])
 def delete_pair(text_id: int, session: Session = Depends(get_session)):
@@ -62,19 +62,17 @@ def delete_pair(text_id: int, session: Session = Depends(get_session)):
     if not parent:
         raise HTTPException(status_code=404, detail="Comment not found")
 
-    # Delete translation(s)
+    # Delete any legacy child translation rows
     translations = session.exec(
         select(PostText).where(PostText.parent_comment_id == text_id)
     ).all()
-
     for t in translations:
         session.delete(t)
 
-    # Delete main comment
     session.delete(parent)
     session.commit()
 
-    return {"message": "Reply pair deleted", "id": text_id}
+    return {"message": "Reply deleted", "id": text_id}
 
 
 # ---------------------------------
@@ -88,53 +86,19 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
     if not parent:
         raise HTTPException(status_code=404, detail="Comment not found")
 
-    # Update parent comment
-    parent.content = payload.get("caption", parent.content)
-    parent.media_url = payload.get("media_url", parent.media_url)
-
+    # Update fields directly on the parent record
+    if "caption" in payload:
+        parent.content = payload["caption"] or None
+    if "translation" in payload:
+        t = payload["translation"]
+        parent.translation = t.strip() if t and t.strip() else None
+    if "note" in payload:
+        n = payload["note"]
+        parent.note = n.strip() if n and n.strip() else None
+    if "media_url" in payload:
+        parent.media_url = payload["media_url"] or None
     if "author_id" in payload:
         parent.author_id = payload["author_id"]
-
-    # Decide translation type based on parent.type
-    if parent.type in ("ig-comment", "ig-reply"):
-        translation_type = "ig-translation"
-    elif parent.type in ("tt-comment", "tt-reply"):
-        translation_type = "tt-translation"
-    else:
-        raise HTTPException(
-            status_code=400, detail=f"Unsupported parent type: {parent.type}")
-
-    # Find translation row (child)
-    child = session.exec(
-        select(PostText).where(PostText.parent_comment_id == text_id)
-    ).first()
-
-    new_trans = payload.get("translation")
-    new_lang = payload.get("translation_language", "en")
-    new_note = payload.get("note", None)  # optional translator's note
-
-    # If translation was removed
-    if new_trans is None or new_trans.strip() == "":
-        if child:
-            session.delete(child)
-    else:
-        if child:
-            child.content = new_trans
-            child.type = translation_type
-            child.language = new_lang
-            child.author_id = parent.author_id
-            child.note = new_note if new_note and new_note.strip() else None
-        else:
-            new_child = PostText(
-                post_id=parent.post_id,
-                type=translation_type,
-                language=new_lang,
-                content=new_trans,
-                parent_comment_id=text_id,
-                author_id=parent.author_id,
-                note=new_note if new_note and new_note.strip() else None,
-            )
-            session.add(new_child)
 
     session.commit()
     return {"message": "Reply updated"}

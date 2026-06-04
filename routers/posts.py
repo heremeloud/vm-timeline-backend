@@ -15,7 +15,15 @@ def _enrich(p: Post, author: Author | None) -> dict:
     obj["author_photo"] = author.profile_photo_url if author else None
     # Parse stored JSON array; fall back to [] on bad data
     try:
-        obj["media_urls"] = json.loads(p.media_urls_json or "[]")
+        raw = json.loads(p.media_urls_json or "[]")
+        # Normalize: old format was list of strings; new format is list of objects
+        normalized = []
+        for item in raw:
+            if isinstance(item, str):
+                normalized.append({"url": item, "text": None, "translation": None, "note": None})
+            else:
+                normalized.append(item)
+        obj["media_urls"] = normalized
     except Exception:
         obj["media_urls"] = []
     return obj

@@ -117,10 +117,11 @@ class PostText(SQLModel, table=True):
 
     author_id: Optional[int] = Field(default=None, foreign_key="author.id")
 
-    content: str
+    content: Optional[str] = None
+    translation: Optional[str] = None   # optional translation of the reply
     posted_at: Optional[str] = None
     media_url: Optional[str] = None
-    note: Optional[str] = None     # optional translator's note (for translation rows)
+    note: Optional[str] = None     # optional translator's note
 
     parent_comment_id: Optional[int] = Field(
         default=None, foreign_key="posttext.id"
