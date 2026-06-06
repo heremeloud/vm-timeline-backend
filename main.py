@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from database import create_db_and_tables, run_migrations
 
 # Routers
-from routers import posts, texts, authors, events, projects
+from routers import posts, texts, authors, events, projects, topics
 
 
 app = FastAPI(title="VM Social Timeline API")
@@ -47,6 +47,7 @@ app.include_router(texts.router)     # /texts/...
 app.include_router(authors.router)   # /authors/...
 app.include_router(events.router)    # /events/...
 app.include_router(projects.router)  # /projects/...
+app.include_router(topics.router)    # /topics/...
 
 
 # ---------------------------------------------------------

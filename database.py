@@ -28,6 +28,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added caption_translation_note to post")
 
+        if "is_visible" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE post SET is_visible = 1 WHERE is_visible IS NULL"))
+            conn.commit()
+            print("Migration: added is_visible to post")
+
         # ── posttext table ──────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(posttext)"))
         posttext_cols = {row[1] for row in result}
@@ -36,6 +42,21 @@ def run_migrations():
             conn.execute(text("ALTER TABLE posttext ADD COLUMN note VARCHAR"))
             conn.commit()
             print("Migration: added note to posttext")
+
+        # ── topicitem table ─────────────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(topicitem)"))
+        topicitem_cols = {row[1] for row in result}
+
+        if topicitem_cols and "show_replies" not in topicitem_cols:
+            conn.execute(text("ALTER TABLE topicitem ADD COLUMN show_replies BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE topicitem SET show_replies = 1 WHERE show_replies IS NULL"))
+            conn.commit()
+            print("Migration: added show_replies to topicitem")
+
+        if topicitem_cols and "media_index" not in topicitem_cols:
+            conn.execute(text("ALTER TABLE topicitem ADD COLUMN media_index INTEGER"))
+            conn.commit()
+            print("Migration: added media_index to topicitem")
 
         # ── event table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(event)"))
@@ -153,6 +174,32 @@ def run_migrations():
             conn.execute(text("ALTER TABLE author ADD COLUMN fc_url VARCHAR"))
             conn.commit()
             print("Migration: added fc_url to author")
+
+        if "show_on_timeline" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN show_on_timeline BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE author SET show_on_timeline = 1 WHERE show_on_timeline IS NULL"))
+            conn.commit()
+            print("Migration: added show_on_timeline to author")
+
+        # ── topic table ─────────────────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(topic)"))
+        topic_cols = {row[1] for row in result}
+
+        if topic_cols and "sort_order" not in topic_cols:
+            conn.execute(text("ALTER TABLE topic ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE topic SET sort_order = id WHERE sort_order IS NULL OR sort_order = 0"))
+            conn.commit()
+            print("Migration: added sort_order to topic")
+
+        if topic_cols and "start_date" not in topic_cols:
+            conn.execute(text("ALTER TABLE topic ADD COLUMN start_date VARCHAR"))
+            conn.commit()
+            print("Migration: added start_date to topic")
+
+        if topic_cols and "end_date" not in topic_cols:
+            conn.execute(text("ALTER TABLE topic ADD COLUMN end_date VARCHAR"))
+            conn.commit()
+            print("Migration: added end_date to topic")
 
 def get_session():
     with Session(engine) as session:

@@ -1,7 +1,8 @@
 import os
 import shutil
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from sqlmodel import Session, select
+from sqlmodel import Session, SQLModel, select
 from database import get_session
 from models import Author
 from middleware.auth import require_admin
@@ -9,6 +10,19 @@ from middleware.auth import require_admin
 UPLOAD_DIR = "uploads/authors"
 
 router = APIRouter(prefix="/authors", tags=["Authors"])
+
+
+class AuthorUpdate(SQLModel):
+    name: Optional[str] = None
+    full_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    birthday: Optional[str] = None
+    twitter_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    tiktok_url: Optional[str] = None
+    gmmtv_url: Optional[str] = None
+    fc_url: Optional[str] = None
+    show_on_timeline: Optional[bool] = None
 
 
 # ---------------------------------------------------------
@@ -30,7 +44,7 @@ def get_author(author_id: int, session: Session = Depends(get_session)):
 # ---------------------------------------------------------
 # ADMIN ONLY — Create author
 # ---------------------------------------------------------
-@router.post("/", response_model=Author)
+@router.post("/", response_model=Author, dependencies=[Depends(require_admin)])
 def create_author(author: Author, session: Session = Depends(get_session)):
     # Unique constraint check
     existing = session.exec(select(Author).where(
@@ -48,8 +62,8 @@ def create_author(author: Author, session: Session = Depends(get_session)):
 # ---------------------------------------------------------
 # ADMIN ONLY — Update author
 # ---------------------------------------------------------
-@router.patch("/{author_id}", response_model=Author)
-def update_author(author_id: int, update: Author, session: Session = Depends(get_session)):
+@router.patch("/{author_id}", response_model=Author, dependencies=[Depends(require_admin)])
+def update_author(author_id: int, update: AuthorUpdate, session: Session = Depends(get_session)):
     author = session.get(Author, author_id)
     if not author:
         raise HTTPException(status_code=404, detail="Author not found")
@@ -98,7 +112,7 @@ def upload_author_photo(author_id: int, file: UploadFile = File(...), session: S
     return author
 
 
-@router.post("/ensure", response_model=Author)
+@router.post("/ensure", response_model=Author, dependencies=[Depends(require_admin)])
 def ensure_author(author: Author, session: Session = Depends(get_session)):
     existing = session.exec(select(Author).where(
         Author.name == author.name)).first()

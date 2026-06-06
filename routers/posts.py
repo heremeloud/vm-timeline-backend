@@ -29,6 +29,49 @@ def _enrich(p: Post, author: Author | None) -> dict:
     return obj
 
 
+@router.get("/admin")
+def get_admin_posts(
+    platform: str | None = None,
+    sort: str = "newest",
+    offset: int = 0,
+    limit: int = 100,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    query = select(Post).where(Post.parent_id == None)
+
+    if platform:
+        query = query.where(Post.platform == platform)
+
+    if sort == "newest":
+        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+    else:
+        query = query.order_by(Post.posted_at, Post.id)
+
+    posts = session.exec(query.offset(offset).limit(limit)).all()
+
+    enriched = []
+    for p in posts:
+        author = session.get(Author, p.author_id) if p.author_id else None
+        enriched.append(_enrich(p, author))
+
+    return enriched
+
+
+@router.get("/admin/{post_id}")
+def get_admin_post(
+    post_id: int,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    post = session.get(Post, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    author = session.get(Author, post.author_id) if post.author_id else None
+    return {"post": _enrich(post, author)}
+
+
 @router.get("/{post_id}")
 def get_post(post_id: int, session: Session = Depends(get_session)):
     post = session.get(Post, post_id)
@@ -36,6 +79,9 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Post not found")
 
     author = session.get(Author, post.author_id) if post.author_id else None
+    if not post.is_visible or not author or not author.show_on_timeline:
+        raise HTTPException(status_code=404, detail="Post not found")
+
     return {"post": _enrich(post, author)}
 
 # -----------------------------
@@ -62,7 +108,15 @@ def get_posts(
     limit: int = 10,
     session: Session = Depends(get_session)
 ):
-    query = select(Post).where(Post.parent_id == None)
+    query = (
+        select(Post)
+        .join(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Author.show_on_timeline == True,
+        )
+    )
 
     if platform:
         query = query.where(Post.platform == platform)
@@ -131,7 +185,13 @@ def create_reply(post_id: int, reply: Post, session: Session = Depends(get_sessi
 @router.get("/{post_id}/thread")
 def get_thread(post_id: int, session: Session = Depends(get_session)):
     replies = session.exec(
-        select(Post).where(Post.parent_id == post_id)
+        select(Post)
+        .join(Author)
+        .where(
+            Post.parent_id == post_id,
+            Post.is_visible == True,
+            Author.show_on_timeline == True,
+        )
     ).all()
 
     enriched = []

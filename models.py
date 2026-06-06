@@ -37,6 +37,7 @@ class Author(SQLModel, table=True):
     tiktok_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
     fc_url: Optional[str] = None             # official fan club URL
+    show_on_timeline: bool = Field(default=False)
 
     # Relationships
     posts: List["Post"] = Relationship(back_populates="author_obj")
@@ -75,6 +76,7 @@ class Post(SQLModel, table=True):
     media_url: Optional[str] = None
 
     media_urls_json: str = Field(default="[]")  # JSON array of media URLs for story carousels
+    is_visible: bool = Field(default=True)
 
     parent_id: Optional[int] = Field(default=None, foreign_key="post.id")
 
@@ -137,6 +139,46 @@ class PostText(SQLModel, table=True):
     @property
     def author_photo(self):
         return self.author_obj.profile_photo_url if self.author_obj else None
+
+
+# ============================================================
+# TOPIC / SPECIAL — private curated mini timelines
+# ============================================================
+class Topic(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    title: str = Field(index=True)
+    original_title: Optional[str] = None
+    slug: Optional[str] = Field(default=None, index=True, unique=True)
+    description: Optional[str] = None
+    cover_url: Optional[str] = None
+    is_public: bool = Field(default=False)
+    created_at: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    sort_order: int = Field(default=0, index=True)
+
+    items: List["TopicItem"] = Relationship(
+        back_populates="topic",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class TopicItem(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    topic_id: int = Field(foreign_key="topic.id")
+    post_id: int = Field(foreign_key="post.id")
+
+    happened_at: Optional[str] = Field(default=None, index=True)  # YYYY-MM-DDTHH:mm
+    label: Optional[str] = None
+    note: Optional[str] = None
+    show_replies: bool = Field(default=True)
+    media_index: Optional[int] = None
+    sort_order: int = Field(default=0)
+
+    topic: Optional[Topic] = Relationship(back_populates="items")
+    post: Optional[Post] = Relationship()
 
 
 # ============================================================
