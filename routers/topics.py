@@ -30,6 +30,7 @@ class TopicCreate(BaseModel):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     is_public: bool = False
+    is_visible: bool = True
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     sort_order: Optional[int] = None
@@ -43,10 +44,15 @@ class TopicUpdate(BaseModel):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     is_public: Optional[bool] = None
+    is_visible: Optional[bool] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     sort_order: Optional[int] = None
     items: Optional[List[TopicItemPayload]] = None
+
+
+class TopicItemTimeUpdate(BaseModel):
+    happened_at: Optional[str] = None
 
 
 def _enrich_post(post: Post, author: Author | None) -> Dict[str, Any]:
@@ -120,8 +126,35 @@ def _replace_items(session: Session, topic_id: int, items: List[TopicItemPayload
 
 @router.get("/", dependencies=[Depends(require_admin)])
 def list_topics(session: Session = Depends(get_session)):
+    topics = session.exec(
+        select(Topic)
+        .where(Topic.is_visible == True)
+        .order_by(Topic.sort_order.desc(), Topic.id.desc())
+    ).all()
+    return [_serialize_topic(session, topic, include_items=False) for topic in topics]
+
+
+@router.get("/admin", dependencies=[Depends(require_admin)])
+def list_admin_topics(session: Session = Depends(get_session)):
     topics = session.exec(select(Topic).order_by(Topic.sort_order.desc(), Topic.id.desc())).all()
     return [_serialize_topic(session, topic, include_items=False) for topic in topics]
+
+
+@router.patch("/items/{item_id}/time", dependencies=[Depends(require_admin)])
+def update_topic_item_time(
+    item_id: int,
+    payload: TopicItemTimeUpdate,
+    session: Session = Depends(get_session),
+):
+    item = session.get(TopicItem, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Topic item not found")
+
+    item.happened_at = payload.happened_at.strip() if payload.happened_at else None
+    session.add(item)
+    session.commit()
+    session.refresh(item)
+    return item.dict()
 
 
 @router.get("/{topic_id}", dependencies=[Depends(require_admin)])
@@ -150,6 +183,7 @@ def create_topic(payload: TopicCreate, session: Session = Depends(get_session)):
         description=(payload.description.strip() if payload.description else None),
         cover_url=(payload.cover_url.strip() if payload.cover_url else None),
         is_public=False,
+        is_visible=payload.is_visible,
         start_date=(payload.start_date.strip() if payload.start_date else None),
         end_date=(payload.end_date.strip() if payload.end_date else None),
         sort_order=payload.sort_order or 0,
@@ -197,6 +231,8 @@ def update_topic(topic_id: int, payload: TopicUpdate, session: Session = Depends
         topic.cover_url = payload.cover_url.strip() or None
     if payload.is_public is not None:
         topic.is_public = False
+    if payload.is_visible is not None:
+        topic.is_visible = payload.is_visible
     if payload.start_date is not None:
         topic.start_date = payload.start_date.strip() or None
     if payload.end_date is not None:

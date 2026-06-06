@@ -72,6 +72,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added parent_event_id to event")
 
+        if "is_visible" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE event SET is_visible = 1 WHERE is_visible IS NULL"))
+            conn.commit()
+            print("Migration: added is_visible to event")
+
         # ── project table ────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols = {row[1] for row in result}
@@ -135,6 +141,12 @@ def run_migrations():
             conn.execute(text("ALTER TABLE project ADD COLUMN parent_project_id INTEGER REFERENCES project(id)"))
             conn.commit()
             print("Migration: added parent_project_id to project")
+
+        if "is_visible" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE project SET is_visible = 1 WHERE is_visible IS NULL"))
+            conn.commit()
+            print("Migration: added is_visible to project")
 
         # ── author table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(author)"))
@@ -200,6 +212,12 @@ def run_migrations():
             conn.execute(text("ALTER TABLE topic ADD COLUMN end_date VARCHAR"))
             conn.commit()
             print("Migration: added end_date to topic")
+
+        if topic_cols and "is_visible" not in topic_cols:
+            conn.execute(text("ALTER TABLE topic ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE topic SET is_visible = 1 WHERE is_visible IS NULL"))
+            conn.commit()
+            print("Migration: added is_visible to topic")
 
 def get_session():
     with Session(engine) as session:

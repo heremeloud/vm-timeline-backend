@@ -115,6 +115,7 @@ class ProjectCreate(BaseModel):
     original_title: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    is_visible: bool = True
     year: Optional[int] = None
     description: Optional[str] = None
     playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
@@ -136,6 +137,7 @@ class ProjectUpdate(BaseModel):
     original_title: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    is_visible: Optional[bool] = None
     year: Optional[int] = None
     description: Optional[str] = None
     playlist_ids: Optional[List[Any]] = None   # list of {name, id} objects or plain ID strings
@@ -161,6 +163,28 @@ def list_categories():
     return {"categories": PROJECT_CATEGORIES}
 
 
+@router.get("/admin", dependencies=[Depends(require_admin)])
+def list_admin_projects(
+    sort: str = "newest",
+    category: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+):
+    query = select(Project)
+
+    if category:
+        query = query.where(Project.category == category.strip().lower())
+
+    if sort == "oldest":
+        query = query.order_by(nullslast(Project.start_date.asc()), Project.id.asc())
+    else:
+        query = query.order_by(nullsfirst(Project.start_date.desc()), Project.id.desc())
+
+    projects = session.exec(query.offset(offset).limit(limit)).all()
+    return [_serialize_project(session, p) for p in projects]
+
+
 # ----------------------------
 # GET list
 # ----------------------------
@@ -171,7 +195,7 @@ def list_projects(
     category: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
-    query = select(Project)
+    query = select(Project).where(Project.is_visible == True)
 
     if category:
         query = query.where(Project.category == category.strip().lower())
@@ -227,6 +251,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         original_title=(payload.original_title.strip() if payload.original_title else None),
         category=category,
         thumbnail_url=(payload.thumbnail_url.strip() if payload.thumbnail_url else None),
+        is_visible=payload.is_visible,
         year=payload.year,
         description=(payload.description.strip() if payload.description else None),
         playlists_json=json.dumps(playlist_objs),
@@ -278,6 +303,8 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.original_title = payload.original_title.strip() or None
     if payload.thumbnail_url is not None:
         p.thumbnail_url = payload.thumbnail_url.strip() or None
+    if payload.is_visible is not None:
+        p.is_visible = payload.is_visible
     if payload.year is not None:
         p.year = payload.year
     if payload.description is not None:

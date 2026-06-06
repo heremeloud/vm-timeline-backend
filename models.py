@@ -153,6 +153,7 @@ class Topic(SQLModel, table=True):
     description: Optional[str] = None
     cover_url: Optional[str] = None
     is_public: bool = Field(default=False)
+    is_visible: bool = Field(default=True)
     created_at: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -191,6 +192,7 @@ class Project(SQLModel, table=True):
     original_title: Optional[str] = None          # Thai title
     category: Optional[str] = Field(default=None, index=True)  # series, concert, movie, variety
     thumbnail_url: Optional[str] = None
+    is_visible: bool = Field(default=True)
     year: Optional[int] = None
     description: Optional[str] = None
     parent_project_id: Optional[int] = Field(default=None, foreign_key="project.id")
@@ -225,6 +227,7 @@ class Event(SQLModel, table=True):
     category: Optional[str] = Field(default=None, index=True)  # e.g. program, live, interview, event, fan meet
     tags_json: str = Field(default="[]")           # list[str] stored as JSON
     media_url: Optional[str] = None                # one image url
+    is_visible: bool = Field(default=True)
     event_date: Optional[str] = Field(default=None, index=True)
     announcement_url: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls

@@ -144,6 +144,7 @@ class EventCreate(BaseModel):
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
     parent_event_id: Optional[int] = None
+    is_visible: bool = True
 
 
 class EventUpdate(BaseModel):
@@ -159,6 +160,7 @@ class EventUpdate(BaseModel):
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
     parent_event_id: Optional[int] = None
+    is_visible: Optional[bool] = None
 
 
 # ----------------------------
@@ -167,6 +169,32 @@ class EventUpdate(BaseModel):
 @router.get("/categories")
 def list_categories():
     return {"categories": EVENT_CATEGORIES}
+
+
+@router.get("/admin", dependencies=[Depends(require_admin)])
+def list_admin_events(
+    sort: str = "newest",
+    offset: int = 0,
+    limit: int = 50,
+    name: Optional[str] = None,
+    category: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    query = select(Event)
+
+    if name:
+        query = query.where(Event.name.ilike(f"%{name.strip()}%"))
+
+    if category:
+        query = query.where(Event.category == category.strip().lower())
+
+    if sort == "oldest":
+        query = query.order_by(Event.event_date, Event.id)
+    else:
+        query = query.order_by(desc(Event.event_date), desc(Event.id))
+
+    events = session.exec(query.offset(offset).limit(limit)).all()
+    return [_serialize_event(session, ev) for ev in events]
 
 
 # ----------------------------
@@ -184,7 +212,7 @@ def list_events(
     author: Optional[str] = None,   # "view", "mim", or "viewmim"
     session: Session = Depends(get_session),
 ):
-    query = select(Event)
+    query = select(Event).where(Event.is_visible == True)
 
     if name:
         query = query.where(Event.name.ilike(f"%{name.strip()}%"))
@@ -269,6 +297,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
         project_id=payload.project_id,
         parent_event_id=payload.parent_event_id,
+        is_visible=payload.is_visible,
     )
 
     session.add(ev)
@@ -335,6 +364,9 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
         ev.parent_event_id = payload.parent_event_id
     elif hasattr(payload, "parent_event_id") and "parent_event_id" in payload.model_fields_set:
         ev.parent_event_id = None  # explicitly cleared
+
+    if payload.is_visible is not None:
+        ev.is_visible = payload.is_visible
 
     session.add(ev)
     session.commit()
