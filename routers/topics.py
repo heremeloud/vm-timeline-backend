@@ -124,7 +124,7 @@ def _replace_items(session: Session, topic_id: int, items: List[TopicItemPayload
     session.commit()
 
 
-@router.get("/", dependencies=[Depends(require_admin)])
+@router.get("/")
 def list_topics(session: Session = Depends(get_session)):
     topics = session.exec(
         select(Topic)
@@ -157,10 +157,10 @@ def update_topic_item_time(
     return item.dict()
 
 
-@router.get("/{topic_id}", dependencies=[Depends(require_admin)])
+@router.get("/{topic_id}")
 def get_topic(topic_id: int, session: Session = Depends(get_session)):
     topic = session.get(Topic, topic_id)
-    if not topic:
+    if not topic or not topic.is_visible:
         raise HTTPException(status_code=404, detail="Topic not found")
     return {"topic": _serialize_topic(session, topic)}
 
