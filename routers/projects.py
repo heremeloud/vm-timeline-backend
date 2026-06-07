@@ -1,4 +1,5 @@
 import json
+import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
 from sqlalchemy import case, nullslast, nullsfirst
@@ -75,14 +76,20 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     if p.parent_project_id:
         pp = session.get(Project, p.parent_project_id)
         if pp:
-            parent_project = {"id": pp.id, "title": pp.title, "thumbnail_url": pp.thumbnail_url, "category": pp.category}
+            parent_project = {
+                "id": pp.id,
+                "title": pp.title,
+                "slug": pp.slug,
+                "thumbnail_url": pp.thumbnail_url,
+                "category": pp.category,
+            }
     obj["parent_project_id"] = p.parent_project_id
     obj["parent_project"] = parent_project
 
     # Child projects
     children = session.exec(select(Project).where(Project.parent_project_id == p.id)).all()
     obj["child_projects"] = [
-        {"id": c.id, "title": c.title, "thumbnail_url": c.thumbnail_url, "category": c.category}
+        {"id": c.id, "title": c.title, "slug": c.slug, "thumbnail_url": c.thumbnail_url, "category": c.category}
         for c in children
     ]
 
@@ -106,6 +113,20 @@ def _ensure_authors(session: Session, author_ids: List[int]) -> List[Author]:
     return [by_id[i] for i in uniq]
 
 
+def _normalize_slug(slug: Optional[str]) -> Optional[str]:
+    if not slug:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "-", slug.strip().lower())
+    normalized = normalized.strip("-")
+    return normalized or None
+
+
+def _get_project_by_ref(session: Session, project_ref: str) -> Optional[Project]:
+    if project_ref.isdigit():
+        return session.get(Project, int(project_ref))
+    return session.exec(select(Project).where(Project.slug == project_ref.strip().lower())).first()
+
+
 # ----------------------------
 # Schemas
 # ----------------------------
@@ -113,6 +134,7 @@ def _ensure_authors(session: Session, author_ids: List[int]) -> List[Author]:
 class ProjectCreate(BaseModel):
     title: str
     original_title: Optional[str] = None
+    slug: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
     is_visible: bool = True
@@ -135,6 +157,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     original_title: Optional[str] = None
+    slug: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
     is_visible: Optional[bool] = None
@@ -185,6 +208,14 @@ def list_admin_projects(
     return [_serialize_project(session, p) for p in projects]
 
 
+@router.get("/admin/{project_id}", dependencies=[Depends(require_admin)])
+def get_admin_project(project_id: int, session: Session = Depends(get_session)):
+    p = session.get(Project, project_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"project": _serialize_project(session, p)}
+
+
 # ----------------------------
 # GET list
 # ----------------------------
@@ -213,10 +244,10 @@ def list_projects(
 # GET one
 # ----------------------------
 
-@router.get("/{project_id}")
-def get_project(project_id: int, session: Session = Depends(get_session)):
-    p = session.get(Project, project_id)
-    if not p:
+@router.get("/{project_ref}")
+def get_project(project_ref: str, session: Session = Depends(get_session)):
+    p = _get_project_by_ref(session, project_ref)
+    if not p or not p.is_visible:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"project": _serialize_project(session, p)}
 
@@ -235,6 +266,12 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     if category and category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
 
+    slug = _normalize_slug(payload.slug)
+    if slug:
+        existing = session.exec(select(Project).where(Project.slug == slug)).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Project slug already exists")
+
     authors = _ensure_authors(session, payload.author_ids or [])
 
     # Normalize playlists: accept both plain strings and {name, id} dicts
@@ -249,6 +286,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     p = Project(
         title=title,
         original_title=(payload.original_title.strip() if payload.original_title else None),
+        slug=slug,
         category=category,
         thumbnail_url=(payload.thumbnail_url.strip() if payload.thumbnail_url else None),
         is_visible=payload.is_visible,
@@ -298,6 +336,14 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         if cat and cat not in VALID_CATEGORIES:
             raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
         p.category = cat
+
+    if payload.slug is not None:
+        slug = _normalize_slug(payload.slug)
+        if slug:
+            existing = session.exec(select(Project).where(Project.slug == slug, Project.id != project_id)).first()
+            if existing:
+                raise HTTPException(status_code=400, detail="Project slug already exists")
+        p.slug = slug
 
     if payload.original_title is not None:
         p.original_title = payload.original_title.strip() or None

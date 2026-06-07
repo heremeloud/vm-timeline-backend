@@ -21,6 +21,7 @@ class AuthorUpdate(SQLModel):
     instagram_url: Optional[str] = None
     tiktok_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    mydramalist_url: Optional[str] = None
     fc_url: Optional[str] = None
     show_on_timeline: Optional[bool] = None
 

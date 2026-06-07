@@ -36,6 +36,7 @@ class Author(SQLModel, table=True):
     instagram_url: Optional[str] = None
     tiktok_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    mydramalist_url: Optional[str] = None
     fc_url: Optional[str] = None             # official fan club URL
     show_on_timeline: bool = Field(default=False)
 
@@ -77,6 +78,7 @@ class Post(SQLModel, table=True):
 
     media_urls_json: str = Field(default="[]")  # JSON array of media URLs for story carousels
     is_visible: bool = Field(default=True)
+    is_adult: bool = Field(default=False)
 
     parent_id: Optional[int] = Field(default=None, foreign_key="post.id")
 
@@ -176,6 +178,7 @@ class TopicItem(SQLModel, table=True):
     note: Optional[str] = None
     show_replies: bool = Field(default=True)
     media_index: Optional[int] = None
+    media_indices_json: str = Field(default="[]")
     sort_order: int = Field(default=0)
 
     topic: Optional[Topic] = Relationship(back_populates="items")
@@ -190,6 +193,7 @@ class Project(SQLModel, table=True):
 
     title: str = Field(index=True)
     original_title: Optional[str] = None          # Thai title
+    slug: Optional[str] = Field(default=None, index=True, unique=True)
     category: Optional[str] = Field(default=None, index=True)  # series, concert, movie, variety
     thumbnail_url: Optional[str] = None
     is_visible: bool = Field(default=True)

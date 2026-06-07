@@ -58,6 +58,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added media_index to topicitem")
 
+        if topicitem_cols and "media_indices_json" not in topicitem_cols:
+            conn.execute(text("ALTER TABLE topicitem ADD COLUMN media_indices_json VARCHAR DEFAULT '[]'"))
+            conn.execute(text("UPDATE topicitem SET media_indices_json = '[' || media_index || ']' WHERE media_index IS NOT NULL"))
+            conn.commit()
+            print("Migration: added media_indices_json to topicitem")
+
         # ── event table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(event)"))
         event_cols = {row[1] for row in result}
@@ -96,6 +102,11 @@ def run_migrations():
             conn.execute(text("ALTER TABLE project ADD COLUMN original_title VARCHAR"))
             conn.commit()
             print("Migration: added original_title to project")
+
+        if "slug" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN slug VARCHAR"))
+            conn.commit()
+            print("Migration: added slug to project")
 
         if "playlists_json" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN playlists_json VARCHAR DEFAULT '[]'"))
@@ -181,6 +192,11 @@ def run_migrations():
             conn.execute(text("ALTER TABLE author ADD COLUMN gmmtv_url VARCHAR"))
             conn.commit()
             print("Migration: added gmmtv_url to author")
+
+        if "mydramalist_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN mydramalist_url VARCHAR"))
+            conn.commit()
+            print("Migration: added mydramalist_url to author")
 
         if "fc_url" not in author_cols:
             conn.execute(text("ALTER TABLE author ADD COLUMN fc_url VARCHAR"))

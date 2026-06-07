@@ -20,6 +20,7 @@ class TopicItemPayload(BaseModel):
     note: Optional[str] = None
     show_replies: bool = True
     media_index: Optional[int] = None
+    media_indices: Optional[List[int]] = None
     sort_order: Optional[int] = None
 
 
@@ -91,6 +92,10 @@ def _serialize_topic(session: Session, topic: Topic, include_items: bool = True)
                 continue
             author = session.get(Author, post.author_id) if post.author_id else None
             item_obj = item.dict()
+            try:
+                item_obj["media_indices"] = json.loads(item.media_indices_json or "[]")
+            except Exception:
+                item_obj["media_indices"] = []
             item_obj["post"] = _enrich_post(post, author)
             items.append(item_obj)
 
@@ -118,10 +123,23 @@ def _replace_items(session: Session, topic_id: int, items: List[TopicItemPayload
                 note=(payload.note.strip() if payload.note else None),
                 show_replies=payload.show_replies,
                 media_index=payload.media_index,
+                media_indices_json=json.dumps(payload.media_indices or ([] if payload.media_index is None else [payload.media_index])),
                 sort_order=payload.sort_order if payload.sort_order is not None else index,
             )
         )
     session.commit()
+
+
+def _normalize_slug(slug: Optional[str]) -> Optional[str]:
+    if not slug:
+        return None
+    return slug.strip().lower().replace(" ", "-") or None
+
+
+def _get_topic_by_ref(session: Session, topic_ref: str) -> Topic | None:
+    if topic_ref.isdigit():
+        return session.get(Topic, int(topic_ref))
+    return session.exec(select(Topic).where(Topic.slug == topic_ref.strip().lower())).first()
 
 
 @router.get("/")
@@ -138,6 +156,14 @@ def list_topics(session: Session = Depends(get_session)):
 def list_admin_topics(session: Session = Depends(get_session)):
     topics = session.exec(select(Topic).order_by(Topic.sort_order.desc(), Topic.id.desc())).all()
     return [_serialize_topic(session, topic, include_items=False) for topic in topics]
+
+
+@router.get("/admin/{topic_id}", dependencies=[Depends(require_admin)])
+def get_admin_topic(topic_id: int, session: Session = Depends(get_session)):
+    topic = session.get(Topic, topic_id)
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    return {"topic": _serialize_topic(session, topic)}
 
 
 @router.patch("/items/{item_id}/time", dependencies=[Depends(require_admin)])
@@ -157,9 +183,9 @@ def update_topic_item_time(
     return item.dict()
 
 
-@router.get("/{topic_id}")
-def get_topic(topic_id: int, session: Session = Depends(get_session)):
-    topic = session.get(Topic, topic_id)
+@router.get("/{topic_ref}")
+def get_topic(topic_ref: str, session: Session = Depends(get_session)):
+    topic = _get_topic_by_ref(session, topic_ref)
     if not topic or not topic.is_visible:
         raise HTTPException(status_code=404, detail="Topic not found")
     return {"topic": _serialize_topic(session, topic)}
@@ -171,15 +197,16 @@ def create_topic(payload: TopicCreate, session: Session = Depends(get_session)):
     if not title:
         raise HTTPException(status_code=400, detail="Title is required")
 
-    if payload.slug:
-        existing = session.exec(select(Topic).where(Topic.slug == payload.slug.strip())).first()
+    slug = _normalize_slug(payload.slug)
+    if slug:
+        existing = session.exec(select(Topic).where(Topic.slug == slug)).first()
         if existing:
             raise HTTPException(status_code=400, detail="Slug already exists")
 
     topic = Topic(
         title=title,
         original_title=(payload.original_title.strip() if payload.original_title else None),
-        slug=(payload.slug.strip() if payload.slug else None),
+        slug=slug,
         description=(payload.description.strip() if payload.description else None),
         cover_url=(payload.cover_url.strip() if payload.cover_url else None),
         is_public=False,
@@ -216,7 +243,7 @@ def update_topic(topic_id: int, payload: TopicUpdate, session: Session = Depends
         topic.title = title
 
     if payload.slug is not None:
-        slug = payload.slug.strip() or None
+        slug = _normalize_slug(payload.slug)
         if slug:
             existing = session.exec(select(Topic).where(Topic.slug == slug, Topic.id != topic_id)).first()
             if existing:
