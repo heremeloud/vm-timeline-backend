@@ -131,6 +131,13 @@ from pydantic import BaseModel
 VALID_CATEGORIES = set(EVENT_CATEGORIES)
 
 
+def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
+    fields_set = getattr(payload, "model_fields_set", None)
+    if fields_set is None:
+        fields_set = getattr(payload, "__fields_set__", set())
+    return field_name in fields_set
+
+
 class EventCreate(BaseModel):
     name: str
     location: Optional[str] = None
@@ -328,41 +335,41 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
             raise HTTPException(status_code=400, detail="Event name cannot be empty")
         ev.name = name
 
-    if payload.location is not None:
-        ev.location = payload.location.strip() or None
+    if _field_was_sent(payload, "location"):
+        ev.location = payload.location.strip() if payload.location else None
 
-    if payload.keyword is not None:
-        ev.keyword = payload.keyword.strip() or None
+    if _field_was_sent(payload, "keyword"):
+        ev.keyword = payload.keyword.strip() if payload.keyword else None
 
-    if payload.category is not None:
-        cat = payload.category.strip().lower() or None
+    if _field_was_sent(payload, "category"):
+        cat = payload.category.strip().lower() if payload.category else None
         if cat and cat not in VALID_CATEGORIES:
             raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
         ev.category = cat
 
-    if payload.media_url is not None:
-        ev.media_url = payload.media_url.strip() or None
+    if _field_was_sent(payload, "media_url"):
+        ev.media_url = payload.media_url.strip() if payload.media_url else None
 
-    if payload.event_date is not None:
-        ev.event_date = payload.event_date.strip() or None
+    if _field_was_sent(payload, "event_date"):
+        ev.event_date = payload.event_date.strip() if payload.event_date else None
 
     if payload.tags is not None:
         ev.tags_json = _safe_dump_tags(payload.tags)
 
-    if payload.announcement_url is not None:
-        ev.announcement_url = payload.announcement_url.strip() or None
+    if _field_was_sent(payload, "announcement_url"):
+        ev.announcement_url = payload.announcement_url.strip() if payload.announcement_url else None
 
     if payload.live_urls is not None:
         ev.live_urls = ",".join(u.strip() for u in payload.live_urls if u.strip())
 
     if payload.project_id is not None:
         ev.project_id = payload.project_id
-    elif hasattr(payload, "project_id") and "project_id" in payload.model_fields_set:
+    elif _field_was_sent(payload, "project_id"):
         ev.project_id = None  # explicitly cleared
 
     if payload.parent_event_id is not None:
         ev.parent_event_id = payload.parent_event_id
-    elif hasattr(payload, "parent_event_id") and "parent_event_id" in payload.model_fields_set:
+    elif _field_was_sent(payload, "parent_event_id"):
         ev.parent_event_id = None  # explicitly cleared
 
     if payload.is_visible is not None:
