@@ -1,5 +1,6 @@
 import json
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlmodel import Session, select, desc
 from database import get_session
 from models import Post, PostText, Author
@@ -56,6 +57,81 @@ def get_admin_posts(
         enriched.append(_enrich(p, author))
 
     return enriched
+
+
+@router.get("/admin/search")
+def search_admin_posts(
+    q: str,
+    platform: str | None = None,
+    offset: int = 0,
+    limit: int = 50,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    term = q.strip()
+    if not term:
+        return []
+
+    pattern = f"%{term}%"
+
+    post_query = select(Post).where(
+        or_(
+            Post.caption.ilike(pattern),
+            Post.caption_translation.ilike(pattern),
+            Post.caption_translation_note.ilike(pattern),
+            Post.external_url.ilike(pattern),
+        )
+    )
+
+    text_query = select(PostText).where(
+        or_(
+            PostText.content.ilike(pattern),
+            PostText.translation.ilike(pattern),
+            PostText.note.ilike(pattern),
+        )
+    )
+
+    if platform and platform != "all":
+        post_query = post_query.where(Post.platform == platform)
+        text_query = text_query.join(Post).where(Post.platform == platform)
+
+    post_matches = session.exec(post_query).all()
+    text_matches = session.exec(text_query).all()
+
+    results = []
+
+    for post in post_matches:
+        author = session.get(Author, post.author_id) if post.author_id else None
+        obj = _enrich(post, author)
+        obj["result_id"] = f"post-{post.id}"
+        obj["result_type"] = "post" if post.parent_id is None else "x-reply"
+        obj["target_post_id"] = post.id if post.parent_id is None else post.parent_id
+        obj["match_text"] = post.caption or post.caption_translation or post.caption_translation_note or post.external_url
+        results.append(obj)
+
+    for text in text_matches:
+        post = session.get(Post, text.post_id)
+        if not post:
+            continue
+        author = session.get(Author, text.author_id) if text.author_id else None
+        post_author = session.get(Author, post.author_id) if post.author_id else None
+        results.append({
+            "id": text.id,
+            "result_id": f"text-{text.id}",
+            "result_type": text.type,
+            "target_post_id": post.id,
+            "post_platform": post.platform,
+            "post_author_name": post_author.name if post_author else None,
+            "author_id": text.author_id,
+            "author_name": author.name if author else None,
+            "posted_at": text.posted_at or post.posted_at,
+            "is_visible": post.is_visible,
+            "external_url": post.external_url,
+            "match_text": text.content or text.translation or text.note,
+        })
+
+    results.sort(key=lambda item: (item.get("posted_at") or "", item.get("result_id") or ""), reverse=True)
+    return results[offset:offset + limit]
 
 
 @router.get("/admin/{post_id}")
