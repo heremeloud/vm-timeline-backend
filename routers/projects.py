@@ -64,7 +64,14 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     obj = p.dict()
     obj["playlists"] = playlists
     obj["authors"] = [
-        {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
+        {
+            "id": a.id,
+            "name": a.name,
+            "profile_photo_url": a.profile_photo_url or a.ig_pfp_url or a.twitter_pfp_url,
+            "ig_pfp_url": a.ig_pfp_url,
+            "twitter_pfp_url": a.twitter_pfp_url,
+            "tiktok_pfp_url": a.tiktok_pfp_url,
+        }
         for a in authors
     ]
     obj["youtube_url"] = p.youtube_url

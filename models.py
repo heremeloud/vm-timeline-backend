@@ -31,6 +31,9 @@ class Author(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     full_name: Optional[str] = None          # full legal/stage name
     profile_photo_url: Optional[str] = None
+    ig_pfp_url: Optional[str] = None
+    twitter_pfp_url: Optional[str] = None
+    tiktok_pfp_url: Optional[str] = None
     birthday: Optional[str] = None           # e.g. "2000-03-15"
     twitter_url: Optional[str] = None
     instagram_url: Optional[str] = None
@@ -107,6 +110,18 @@ class Post(SQLModel, table=True):
     def author_photo(self):
         return self.author_obj.profile_photo_url if self.author_obj else None
 
+    @property
+    def author_ig_pfp_url(self):
+        return self.author_obj.ig_pfp_url if self.author_obj else None
+
+    @property
+    def author_twitter_pfp_url(self):
+        return self.author_obj.twitter_pfp_url if self.author_obj else None
+
+    @property
+    def author_tiktok_pfp_url(self):
+        return self.author_obj.tiktok_pfp_url if self.author_obj else None
+
 
 # ============================================================
 # POST TEXT — IG replies, translations, general text entities
@@ -141,6 +156,18 @@ class PostText(SQLModel, table=True):
     @property
     def author_photo(self):
         return self.author_obj.profile_photo_url if self.author_obj else None
+
+    @property
+    def author_ig_pfp_url(self):
+        return self.author_obj.ig_pfp_url if self.author_obj else None
+
+    @property
+    def author_twitter_pfp_url(self):
+        return self.author_obj.twitter_pfp_url if self.author_obj else None
+
+    @property
+    def author_tiktok_pfp_url(self):
+        return self.author_obj.tiktok_pfp_url if self.author_obj else None
 
 
 # ============================================================

@@ -46,7 +46,11 @@ def get_by_post(post_id: int, session: Session = Depends(get_session)):
 
         cd = c.dict()
         cd["author_name"] = author.name if author else None
-        cd["author_photo"] = author.profile_photo_url if author else None
+        cd["author_photo"] = (author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url) if author else None
+        cd["author_ig_pfp_url"] = author.ig_pfp_url if author else None
+        cd["author_twitter_pfp_url"] = author.twitter_pfp_url if author else None
+        cd["author_tiktok_pfp_url"] = author.tiktok_pfp_url if author else None
+        cd["author_instagram_url"] = author.instagram_url if author else None
 
         enriched.append(cd)
 

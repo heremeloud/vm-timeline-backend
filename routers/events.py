@@ -68,7 +68,14 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
     obj["project_id"] = getattr(ev, "project_id", None)
 
     obj["authors"] = [
-        {"id": a.id, "name": a.name, "profile_photo_url": a.profile_photo_url}
+        {
+            "id": a.id,
+            "name": a.name,
+            "profile_photo_url": a.profile_photo_url or a.ig_pfp_url or a.twitter_pfp_url,
+            "ig_pfp_url": a.ig_pfp_url,
+            "twitter_pfp_url": a.twitter_pfp_url,
+            "tiktok_pfp_url": a.tiktok_pfp_url,
+        }
         for a in authors
     ]
 

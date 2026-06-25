@@ -14,6 +14,25 @@ def create_db_and_tables():
 def run_migrations():
     """Add any new columns that may not exist yet (safe to run multiple times)."""
     with engine.connect() as conn:
+        # ── author table ────────────────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(author)"))
+        author_cols = {row[1] for row in result}
+
+        if "twitter_pfp_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN twitter_pfp_url VARCHAR"))
+            conn.commit()
+            print("Migration: added twitter_pfp_url to author")
+
+        if "ig_pfp_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN ig_pfp_url VARCHAR"))
+            conn.commit()
+            print("Migration: added ig_pfp_url to author")
+
+        if "tiktok_pfp_url" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN tiktok_pfp_url VARCHAR"))
+            conn.commit()
+            print("Migration: added tiktok_pfp_url to author")
+
         # ── post table ──────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(post)"))
         post_cols = {row[1] for row in result}

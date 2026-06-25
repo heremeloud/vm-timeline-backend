@@ -13,7 +13,11 @@ def _enrich(p: Post, author: Author | None) -> dict:
     """Return a post dict with author info and parsed media_urls list."""
     obj = p.dict()
     obj["author_name"] = author.name if author else None
-    obj["author_photo"] = author.profile_photo_url if author else None
+    obj["author_photo"] = (author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url) if author else None
+    obj["author_ig_pfp_url"] = author.ig_pfp_url if author else None
+    obj["author_twitter_pfp_url"] = author.twitter_pfp_url if author else None
+    obj["author_tiktok_pfp_url"] = author.tiktok_pfp_url if author else None
+    obj["author_instagram_url"] = author.instagram_url if author else None
     # Parse stored JSON array; fall back to [] on bad data
     try:
         raw = json.loads(p.media_urls_json or "[]")
