@@ -26,6 +26,10 @@ app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
 
 @app.on_event("startup")
 def on_startup():
+    if os.getenv("VERCEL") == "1":
+        print("Skipping DB setup on Vercel read-only deployment")
+        return
+
     create_db_and_tables()
     run_migrations()
 
