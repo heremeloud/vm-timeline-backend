@@ -55,6 +55,8 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
         authors = [by_id[i] for i in author_ids if i in by_id]
 
     obj = ev.dict()
+    obj["start_date"] = getattr(ev, "start_date", None) or getattr(ev, "event_date", None)
+    obj["end_date"] = getattr(ev, "end_date", None)
 
     # ensure tags come back as list
     obj["tags"] = _safe_parse_tags(getattr(ev, "tags_json", "[]"))
@@ -90,10 +92,17 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
 
     # Child events (interviews inside a press tour)
     children = session.exec(
-        select(Event).where(Event.parent_event_id == ev.id).order_by(Event.event_date, Event.id)
+        select(Event).where(Event.parent_event_id == ev.id).order_by(Event.start_date, Event.id)
     ).all()
     obj["child_events"] = [
-        {"id": c.id, "name": c.name, "event_date": c.event_date, "category": c.category}
+        {
+            "id": c.id,
+            "name": c.name,
+            "event_date": c.event_date,
+            "start_date": c.start_date or c.event_date,
+            "end_date": c.end_date,
+            "category": c.category,
+        }
         for c in children
     ]
 
@@ -153,6 +162,8 @@ class EventCreate(BaseModel):
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     event_date: Optional[str] = None  # YYYY-MM-DD
+    start_date: Optional[str] = None  # YYYY-MM-DD
+    end_date: Optional[str] = None  # YYYY-MM-DD
     announcement_url: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
@@ -169,6 +180,8 @@ class EventUpdate(BaseModel):
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     event_date: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
     announcement_url: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
@@ -203,9 +216,9 @@ def list_admin_events(
         query = query.where(Event.category == category.strip().lower())
 
     if sort == "oldest":
-        query = query.order_by(Event.event_date, Event.id)
+        query = query.order_by(Event.start_date, Event.id)
     else:
-        query = query.order_by(desc(Event.event_date), desc(Event.id))
+        query = query.order_by(desc(Event.start_date), desc(Event.id))
 
     events = session.exec(query.offset(offset).limit(limit)).all()
     return [_serialize_event(session, ev) for ev in events]
@@ -263,9 +276,9 @@ def list_events(
         query = query.where(Event.id.in_(allowed)) if allowed else query.where(Event.id == -1)
 
     if sort == "oldest":
-        query = query.order_by(Event.event_date, Event.id)
+        query = query.order_by(Event.start_date, Event.id)
     else:
-        query = query.order_by(desc(Event.event_date), desc(Event.id))
+        query = query.order_by(desc(Event.start_date), desc(Event.id))
 
     query = query.offset(offset).limit(limit)
 
@@ -299,6 +312,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
     if category and category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
 
+    start_date = (payload.start_date or payload.event_date or "").strip() or None
+    end_date = (payload.end_date or "").strip() or None
+
     ev = Event(
         name=name,
         location=(payload.location.strip() if payload.location else None),
@@ -306,7 +322,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         category=category,
         tags_json=_safe_dump_tags(payload.tags),
         media_url=(payload.media_url.strip() if payload.media_url else None),
-        event_date=(payload.event_date.strip() if payload.event_date else None),
+        event_date=start_date,
+        start_date=start_date,
+        end_date=end_date,
         announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
         live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
         project_id=payload.project_id,
@@ -359,6 +377,15 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
 
     if _field_was_sent(payload, "event_date"):
         ev.event_date = payload.event_date.strip() if payload.event_date else None
+
+    if _field_was_sent(payload, "start_date"):
+        ev.start_date = payload.start_date.strip() if payload.start_date else None
+        ev.event_date = ev.start_date
+    elif _field_was_sent(payload, "event_date"):
+        ev.start_date = ev.event_date
+
+    if _field_was_sent(payload, "end_date"):
+        ev.end_date = payload.end_date.strip() if payload.end_date else None
 
     if payload.tags is not None:
         ev.tags_json = _safe_dump_tags(payload.tags)

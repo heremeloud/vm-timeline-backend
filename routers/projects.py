@@ -58,7 +58,7 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
 
     # Linked events
     linked_events = session.exec(
-        select(Event).where(Event.project_id == p.id).order_by(Event.event_date)
+        select(Event).where(Event.project_id == p.id).order_by(Event.start_date)
     ).all()
 
     obj = p.dict()
@@ -101,7 +101,15 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     ]
 
     obj["events"] = [
-        {"id": e.id, "name": e.name, "event_date": e.event_date, "category": e.category, "parent_event_id": e.parent_event_id}
+        {
+            "id": e.id,
+            "name": e.name,
+            "event_date": e.event_date,
+            "start_date": e.start_date or e.event_date,
+            "end_date": e.end_date,
+            "category": e.category,
+            "parent_event_id": e.parent_event_id,
+        }
         for e in linked_events
     ]
     return obj

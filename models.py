@@ -260,6 +260,8 @@ class Event(SQLModel, table=True):
     media_url: Optional[str] = None                # one image url
     is_visible: bool = Field(default=True)
     event_date: Optional[str] = Field(default=None, index=True)
+    start_date: Optional[str] = Field(default=None, index=True)
+    end_date: Optional[str] = Field(default=None, index=True)
     announcement_url: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls
 

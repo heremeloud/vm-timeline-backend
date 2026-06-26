@@ -103,6 +103,20 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to event")
 
+        if "start_date" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN start_date VARCHAR"))
+            conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
+            conn.commit()
+            print("Migration: added start_date to event")
+        elif "event_date" in event_cols:
+            conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
+            conn.commit()
+
+        if "end_date" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN end_date VARCHAR"))
+            conn.commit()
+            print("Migration: added end_date to event")
+
         # ── project table ────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols = {row[1] for row in result}
