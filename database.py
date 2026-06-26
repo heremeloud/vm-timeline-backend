@@ -109,8 +109,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added start_date to event")
         elif "event_date" in event_cols:
-            conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
-            conn.commit()
+            missing_start_dates = conn.execute(
+                text("SELECT COUNT(*) FROM event WHERE start_date IS NULL AND event_date IS NOT NULL")
+            ).scalar_one()
+            if missing_start_dates:
+                conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
+                conn.commit()
 
         if "end_date" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN end_date VARCHAR"))
