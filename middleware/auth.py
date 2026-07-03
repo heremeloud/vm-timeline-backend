@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
-from passlib.context import CryptContext
+import bcrypt
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,13 +27,14 @@ print("ADMIN_PASSWORD_HASH is set:", ADMIN_PASSWORD_HASH is not None)
 if not ADMIN_USERNAME or not ADMIN_PASSWORD_HASH:
     print("WARNING: ADMIN_USERNAME or ADMIN_PASSWORD_HASH not set in .env!")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(
+        plain_password.encode("utf-8"),
+        hashed_password.encode("utf-8"),
+    )
 
 
 def create_access_token(data: dict) -> str:
