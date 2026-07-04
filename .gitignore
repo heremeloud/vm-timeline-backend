@@ -218,6 +218,9 @@ __marimo__/
 # Logs
 logs
 *.log
+
+# Local database backups
+vm-social.db.before-*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
