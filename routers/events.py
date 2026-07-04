@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
+from sqlalchemy import func
 from typing import Optional, List, Any, Dict
 import json
 
@@ -237,6 +238,8 @@ def list_events(
     tag: Optional[str] = None,
     category: Optional[str] = None,
     author: Optional[str] = None,   # "view", "mim", or "viewmim"
+    visible_start: Optional[str] = None,
+    visible_end: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(Event).where(Event.is_visible == True)
@@ -253,6 +256,15 @@ def list_events(
 
     if category:
         query = query.where(Event.category == category.strip().lower())
+
+    if visible_start or visible_end:
+        event_start = func.coalesce(Event.start_date, Event.event_date)
+        event_end = func.coalesce(Event.end_date, Event.start_date, Event.event_date)
+
+        if visible_end:
+            query = query.where(event_start <= visible_end.strip())
+        if visible_start:
+            query = query.where(event_end >= visible_start.strip())
 
     if author:
         author_lower = author.strip().lower()
