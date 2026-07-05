@@ -88,6 +88,8 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
                 "title": pp.title,
                 "slug": pp.slug,
                 "thumbnail_url": pp.thumbnail_url,
+                "thumbnail_focal_x": pp.thumbnail_focal_x,
+                "thumbnail_focal_y": pp.thumbnail_focal_y,
                 "category": pp.category,
             }
     obj["parent_project_id"] = p.parent_project_id
@@ -96,7 +98,15 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     # Child projects
     children = session.exec(select(Project).where(Project.parent_project_id == p.id)).all()
     obj["child_projects"] = [
-        {"id": c.id, "title": c.title, "slug": c.slug, "thumbnail_url": c.thumbnail_url, "category": c.category}
+        {
+            "id": c.id,
+            "title": c.title,
+            "slug": c.slug,
+            "thumbnail_url": c.thumbnail_url,
+            "thumbnail_focal_x": c.thumbnail_focal_x,
+            "thumbnail_focal_y": c.thumbnail_focal_y,
+            "category": c.category,
+        }
         for c in children
     ]
 
@@ -152,6 +162,8 @@ class ProjectCreate(BaseModel):
     slug: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    thumbnail_focal_x: Optional[float] = None
+    thumbnail_focal_y: Optional[float] = None
     is_visible: bool = True
     year: Optional[int] = None
     description: Optional[str] = None
@@ -175,6 +187,8 @@ class ProjectUpdate(BaseModel):
     slug: Optional[str] = None
     category: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    thumbnail_focal_x: Optional[float] = None
+    thumbnail_focal_y: Optional[float] = None
     is_visible: Optional[bool] = None
     year: Optional[int] = None
     description: Optional[str] = None
@@ -304,6 +318,8 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         slug=slug,
         category=category,
         thumbnail_url=(payload.thumbnail_url.strip() if payload.thumbnail_url else None),
+        thumbnail_focal_x=payload.thumbnail_focal_x,
+        thumbnail_focal_y=payload.thumbnail_focal_y,
         is_visible=payload.is_visible,
         year=payload.year,
         description=(payload.description.strip() if payload.description else None),
@@ -364,6 +380,10 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.original_title = payload.original_title.strip() or None
     if payload.thumbnail_url is not None:
         p.thumbnail_url = payload.thumbnail_url.strip() or None
+    if payload.thumbnail_focal_x is not None:
+        p.thumbnail_focal_x = payload.thumbnail_focal_x
+    if payload.thumbnail_focal_y is not None:
+        p.thumbnail_focal_y = payload.thumbnail_focal_y
     if payload.is_visible is not None:
         p.is_visible = payload.is_visible
     if payload.year is not None:

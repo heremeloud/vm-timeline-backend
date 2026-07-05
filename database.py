@@ -121,6 +121,16 @@ def run_migrations():
             conn.commit()
             print("Migration: added end_date to event")
 
+        if "media_focal_x" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN media_focal_x REAL"))
+            conn.commit()
+            print("Migration: added media_focal_x to event")
+
+        if "media_focal_y" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN media_focal_y REAL"))
+            conn.commit()
+            print("Migration: added media_focal_y to event")
+
         # ── project table ────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols = {row[1] for row in result}
@@ -195,6 +205,16 @@ def run_migrations():
             conn.execute(text("UPDATE project SET is_visible = 1 WHERE is_visible IS NULL"))
             conn.commit()
             print("Migration: added is_visible to project")
+
+        if "thumbnail_focal_x" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN thumbnail_focal_x REAL"))
+            conn.commit()
+            print("Migration: added thumbnail_focal_x to project")
+
+        if "thumbnail_focal_y" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN thumbnail_focal_y REAL"))
+            conn.commit()
+            print("Migration: added thumbnail_focal_y to project")
 
         # ── author table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(author)"))

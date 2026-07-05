@@ -112,10 +112,14 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
         proj = session.get(Project, ev.project_id)
         obj["project_title"] = proj.title if proj else None
         obj["project_thumbnail_url"] = proj.thumbnail_url if proj else None
+        obj["project_thumbnail_focal_x"] = proj.thumbnail_focal_x if proj else None
+        obj["project_thumbnail_focal_y"] = proj.thumbnail_focal_y if proj else None
         obj["project_category"] = proj.category if proj else None
     else:
         obj["project_title"] = None
         obj["project_thumbnail_url"] = None
+        obj["project_thumbnail_focal_x"] = None
+        obj["project_thumbnail_focal_y"] = None
         obj["project_category"] = None
 
     return obj
@@ -162,6 +166,8 @@ class EventCreate(BaseModel):
     category: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
+    media_focal_x: Optional[float] = None
+    media_focal_y: Optional[float] = None
     event_date: Optional[str] = None  # YYYY-MM-DD
     start_date: Optional[str] = None  # YYYY-MM-DD
     end_date: Optional[str] = None  # YYYY-MM-DD
@@ -180,6 +186,8 @@ class EventUpdate(BaseModel):
     category: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
+    media_focal_x: Optional[float] = None
+    media_focal_y: Optional[float] = None
     event_date: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
@@ -334,6 +342,8 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         category=category,
         tags_json=_safe_dump_tags(payload.tags),
         media_url=(payload.media_url.strip() if payload.media_url else None),
+        media_focal_x=payload.media_focal_x,
+        media_focal_y=payload.media_focal_y,
         event_date=start_date,
         start_date=start_date,
         end_date=end_date,
@@ -386,6 +396,12 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
 
     if _field_was_sent(payload, "media_url"):
         ev.media_url = payload.media_url.strip() if payload.media_url else None
+
+    if _field_was_sent(payload, "media_focal_x"):
+        ev.media_focal_x = payload.media_focal_x
+
+    if _field_was_sent(payload, "media_focal_y"):
+        ev.media_focal_y = payload.media_focal_y
 
     if _field_was_sent(payload, "event_date"):
         ev.event_date = payload.event_date.strip() if payload.event_date else None

@@ -223,6 +223,8 @@ class Project(SQLModel, table=True):
     slug: Optional[str] = Field(default=None, index=True, unique=True)
     category: Optional[str] = Field(default=None, index=True)  # series, concert, movie, variety
     thumbnail_url: Optional[str] = None
+    thumbnail_focal_x: Optional[float] = None     # 0-100, % from left
+    thumbnail_focal_y: Optional[float] = None     # 0-100, % from top
     is_visible: bool = Field(default=True)
     year: Optional[int] = None
     description: Optional[str] = None
@@ -258,6 +260,8 @@ class Event(SQLModel, table=True):
     category: Optional[str] = Field(default=None, index=True)  # e.g. program, live, interview, event, fan meet
     tags_json: str = Field(default="[]")           # list[str] stored as JSON
     media_url: Optional[str] = None                # one image url
+    media_focal_x: Optional[float] = None          # 0-100, % from left
+    media_focal_y: Optional[float] = None          # 0-100, % from top
     is_visible: bool = Field(default=True)
     event_date: Optional[str] = Field(default=None, index=True)
     start_date: Optional[str] = Field(default=None, index=True)
