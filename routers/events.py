@@ -38,7 +38,22 @@ def _safe_dump_tags(tags: Optional[List[str]]) -> str:
     return json.dumps(clean, ensure_ascii=False)
 
 
-def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
+def _safe_parse_urls(urls_json: str) -> List[str]:
+    try:
+        data = json.loads(urls_json or "[]")
+        if isinstance(data, list):
+            return [str(url).strip() for url in data if str(url).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _safe_dump_urls(urls: Optional[List[str]]) -> str:
+    clean = [str(url).strip() for url in (urls or []) if str(url).strip()]
+    return json.dumps(list(dict.fromkeys(clean)), ensure_ascii=False)
+
+
+def _serialize_event(session: Session, ev: Event, include_private: bool = False) -> Dict[str, Any]:
     # Load participants via link table
     links = session.exec(
         select(EventAuthorLink).where(EventAuthorLink.event_id == ev.id)
@@ -66,8 +81,18 @@ def _serialize_event(session: Session, ev: Event) -> Dict[str, Any]:
     raw = getattr(ev, "live_urls", "") or ""
     obj["live_urls"] = [u.strip() for u in raw.split(",") if u.strip()]
 
-    # ensure these always present in response
-    obj["announcement_url"] = getattr(ev, "announcement_url", None)
+    # Private reference fields are only returned from authenticated admin routes.
+    obj.pop("announcement_url", None)
+    obj.pop("announcement_urls_json", None)
+    obj.pop("private_notes", None)
+    if include_private:
+        announcement_urls = _safe_parse_urls(getattr(ev, "announcement_urls_json", "[]"))
+        legacy_url = (getattr(ev, "announcement_url", None) or "").strip()
+        if legacy_url and legacy_url not in announcement_urls:
+            announcement_urls.insert(0, legacy_url)
+        obj["announcement_urls"] = announcement_urls
+        obj["private_notes"] = getattr(ev, "private_notes", None)
+
     obj["project_id"] = getattr(ev, "project_id", None)
 
     obj["authors"] = [
@@ -171,7 +196,8 @@ class EventCreate(BaseModel):
     event_date: Optional[str] = None  # YYYY-MM-DD
     start_date: Optional[str] = None  # YYYY-MM-DD
     end_date: Optional[str] = None  # YYYY-MM-DD
-    announcement_url: Optional[str] = None
+    announcement_urls: Optional[List[str]] = None
+    private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
@@ -191,7 +217,8 @@ class EventUpdate(BaseModel):
     event_date: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    announcement_url: Optional[str] = None
+    announcement_urls: Optional[List[str]] = None
+    private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
@@ -230,7 +257,15 @@ def list_admin_events(
         query = query.order_by(desc(Event.start_date), desc(Event.id))
 
     events = session.exec(query.offset(offset).limit(limit)).all()
-    return [_serialize_event(session, ev) for ev in events]
+    return [_serialize_event(session, ev, include_private=True) for ev in events]
+
+
+@router.get("/admin/{event_id}", dependencies=[Depends(require_admin)])
+def get_admin_event(event_id: int, session: Session = Depends(get_session)):
+    ev = session.get(Event, event_id)
+    if not ev:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"event": _serialize_event(session, ev, include_private=True)}
 
 
 # ----------------------------
@@ -347,7 +382,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         event_date=start_date,
         start_date=start_date,
         end_date=end_date,
-        announcement_url=(payload.announcement_url.strip() if payload.announcement_url else None),
+        announcement_url=None,
+        announcement_urls_json=_safe_dump_urls(payload.announcement_urls),
+        private_notes=(payload.private_notes.strip() if payload.private_notes else None),
         live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
         project_id=payload.project_id,
         parent_event_id=payload.parent_event_id,
@@ -418,8 +455,12 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if payload.tags is not None:
         ev.tags_json = _safe_dump_tags(payload.tags)
 
-    if _field_was_sent(payload, "announcement_url"):
-        ev.announcement_url = payload.announcement_url.strip() if payload.announcement_url else None
+    if _field_was_sent(payload, "announcement_urls"):
+        ev.announcement_urls_json = _safe_dump_urls(payload.announcement_urls)
+        ev.announcement_url = None
+
+    if _field_was_sent(payload, "private_notes"):
+        ev.private_notes = payload.private_notes.strip() if payload.private_notes else None
 
     if payload.live_urls is not None:
         ev.live_urls = ",".join(u.strip() for u in payload.live_urls if u.strip())

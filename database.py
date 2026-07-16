@@ -131,6 +131,24 @@ def run_migrations():
             conn.commit()
             print("Migration: added media_focal_y to event")
 
+        if "announcement_urls_json" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN announcement_urls_json VARCHAR DEFAULT '[]'"))
+            if "announcement_url" in event_cols:
+                conn.execute(
+                    text(
+                        "UPDATE event "
+                        "SET announcement_urls_json = json_array(announcement_url) "
+                        "WHERE announcement_url IS NOT NULL AND trim(announcement_url) != ''"
+                    )
+                )
+            conn.commit()
+            print("Migration: added announcement_urls_json to event")
+
+        if "private_notes" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN private_notes VARCHAR"))
+            conn.commit()
+            print("Migration: added private_notes to event")
+
         # ── project table ────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(project)"))
         project_cols = {row[1] for row in result}

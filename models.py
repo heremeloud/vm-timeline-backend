@@ -266,7 +266,9 @@ class Event(SQLModel, table=True):
     event_date: Optional[str] = Field(default=None, index=True)
     start_date: Optional[str] = Field(default=None, index=True)
     end_date: Optional[str] = Field(default=None, index=True)
-    announcement_url: Optional[str] = None
+    announcement_url: Optional[str] = None         # legacy single URL
+    announcement_urls_json: str = Field(default="[]")
+    private_notes: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls
 
     project_id: Optional[int] = Field(default=None, foreign_key="project.id")
