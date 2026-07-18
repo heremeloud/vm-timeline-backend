@@ -236,6 +236,7 @@ class Project(SQLModel, table=True):
     youtube_url: Optional[str] = None             # single YouTube video URL
     mydramalist_url: Optional[str] = None         # MyDramaList page URL
     gmmtv_url: Optional[str] = None              # GMMTV official site URL
+    official_twitter_url: Optional[str] = None   # official series Twitter/X account
     spotify_url: Optional[str] = None             # Spotify album/track URL
     apple_music_url: Optional[str] = None         # Apple Music album/track URL
     start_date: Optional[str] = None              # YYYY-MM-DD

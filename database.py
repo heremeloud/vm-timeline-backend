@@ -198,6 +198,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added gmmtv_url to project")
 
+        if "official_twitter_url" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN official_twitter_url VARCHAR"))
+            conn.commit()
+            print("Migration: added official_twitter_url to project")
+
         if "youtube_url" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN youtube_url VARCHAR"))
             conn.commit()

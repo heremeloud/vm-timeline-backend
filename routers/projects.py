@@ -173,6 +173,7 @@ class ProjectCreate(BaseModel):
     youtube_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    official_twitter_url: Optional[str] = None
     spotify_url: Optional[str] = None
     apple_music_url: Optional[str] = None
     parent_project_id: Optional[int] = None
@@ -198,6 +199,7 @@ class ProjectUpdate(BaseModel):
     youtube_url: Optional[str] = None
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
+    official_twitter_url: Optional[str] = None
     spotify_url: Optional[str] = None
     apple_music_url: Optional[str] = None
     parent_project_id: Optional[int] = None
@@ -329,6 +331,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         youtube_url=(payload.youtube_url.strip() if payload.youtube_url else None),
         mydramalist_url=(payload.mydramalist_url.strip() if payload.mydramalist_url else None),
         gmmtv_url=(payload.gmmtv_url.strip() if payload.gmmtv_url else None),
+        official_twitter_url=(payload.official_twitter_url.strip() if payload.official_twitter_url else None),
         spotify_url=(payload.spotify_url.strip() if payload.spotify_url else None),
         apple_music_url=(payload.apple_music_url.strip() if payload.apple_music_url else None),
         parent_project_id=payload.parent_project_id or None,
@@ -408,6 +411,8 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.mydramalist_url = payload.mydramalist_url.strip() or None
     if payload.gmmtv_url is not None:
         p.gmmtv_url = payload.gmmtv_url.strip() or None
+    if payload.official_twitter_url is not None:
+        p.official_twitter_url = payload.official_twitter_url.strip() or None
     if payload.spotify_url is not None:
         p.spotify_url = payload.spotify_url.strip() or None
     if payload.apple_music_url is not None:
