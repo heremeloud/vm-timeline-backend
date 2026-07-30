@@ -234,6 +234,27 @@ def list_categories():
     return {"categories": EVENT_CATEGORIES}
 
 
+@router.get("/tag-index")
+def get_event_tag_index(session: Session = Depends(get_session)):
+    """Return only the event fields needed to link timeline hashtags."""
+    events = session.exec(
+        select(Event)
+        .where(Event.is_visible == True)
+        .order_by(Event.start_date, Event.id)
+    ).all()
+    return [
+        {
+            "id": event.id,
+            "tags": _safe_parse_tags(event.tags_json),
+            "category": event.category,
+            "start_date": event.start_date or event.event_date,
+            "end_date": event.end_date,
+            "project_id": event.project_id,
+        }
+        for event in events
+    ]
+
+
 @router.get("/admin", dependencies=[Depends(require_admin)])
 def list_admin_events(
     sort: str = "newest",

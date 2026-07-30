@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_
 from sqlmodel import Session, select, desc
@@ -31,6 +32,17 @@ def _enrich(p: Post, author: Author | None) -> dict:
         obj["media_urls"] = normalized
     except Exception:
         obj["media_urls"] = []
+    return obj
+
+
+def _enrich_text(text: PostText, author: Author | None) -> dict:
+    obj = text.dict()
+    obj["author_name"] = author.name if author else None
+    obj["author_photo"] = (author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url) if author else None
+    obj["author_ig_pfp_url"] = author.ig_pfp_url if author else None
+    obj["author_twitter_pfp_url"] = author.twitter_pfp_url if author else None
+    obj["author_tiktok_pfp_url"] = author.tiktok_pfp_url if author else None
+    obj["author_instagram_url"] = author.instagram_url if author else None
     return obj
 
 
@@ -150,6 +162,105 @@ def get_admin_post(
 
     author = session.get(Author, post.author_id) if post.author_id else None
     return {"post": _enrich(post, author)}
+
+
+@router.get("/timeline")
+def get_timeline(
+    platform: str | None = None,
+    sort: str = "newest",
+    offset: int = 0,
+    limit: int = 10,
+    session: Session = Depends(get_session),
+):
+    """Return one fully-hydrated timeline page without per-post API calls."""
+    query = (
+        select(Post)
+        .join(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Author.show_on_timeline == True,
+        )
+    )
+    if platform:
+        query = query.where(Post.platform == platform)
+
+    if sort == "newest":
+        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+    else:
+        query = query.order_by(Post.posted_at, Post.id)
+
+    # Fetch one extra row so the client knows whether a next page exists.
+    page_rows = session.exec(query.offset(offset).limit(limit + 1)).all()
+    has_more = len(page_rows) > limit
+    posts = page_rows[:limit]
+    post_ids = [post.id for post in posts if post.id is not None]
+
+    comments = []
+    replies = []
+    if post_ids:
+        comments = session.exec(
+            select(PostText).where(PostText.post_id.in_(post_ids))
+        ).all()
+        replies = session.exec(
+            select(Post)
+            .join(Author)
+            .where(
+                Post.parent_id.in_(post_ids),
+                Post.is_visible == True,
+                Author.show_on_timeline == True,
+            )
+            .order_by(Post.posted_at, Post.id)
+        ).all()
+
+    author_ids = {
+        item.author_id
+        for item in [*posts, *comments, *replies]
+        if item.author_id is not None
+    }
+    authors = (
+        session.exec(select(Author).where(Author.id.in_(author_ids))).all()
+        if author_ids
+        else []
+    )
+    authors_by_id = {author.id: author for author in authors}
+
+    comments_by_post = defaultdict(list)
+    for comment in comments:
+        comments_by_post[comment.post_id].append(
+            _enrich_text(comment, authors_by_id.get(comment.author_id))
+        )
+
+    replies_by_post = defaultdict(list)
+    for reply in replies:
+        replies_by_post[reply.parent_id].append(
+            _enrich(reply, authors_by_id.get(reply.author_id))
+        )
+
+    items = []
+    for post in posts:
+        obj = _enrich(post, authors_by_id.get(post.author_id))
+        obj["comments"] = comments_by_post[post.id]
+        obj["childrenPosts"] = replies_by_post[post.id]
+        items.append(obj)
+
+    newest = session.exec(
+        select(Post)
+        .join(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Author.show_on_timeline == True,
+        )
+        .order_by(desc(Post.posted_at), desc(Post.id))
+        .limit(1)
+    ).first()
+
+    return {
+        "items": items,
+        "has_more": has_more,
+        "last_updated": newest.posted_at if newest else None,
+    }
 
 
 @router.get("/{post_id}")
