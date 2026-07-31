@@ -108,6 +108,22 @@ def run_migrations():
             conn.commit()
             print("Migration: added english_name to event")
 
+        if "subcategory" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN subcategory VARCHAR"))
+            conn.commit()
+            print("Migration: added subcategory to event")
+
+        conn.execute(text("UPDATE event SET category = 'show', subcategory = 'interview' WHERE lower(trim(category)) = 'interview'"))
+        conn.execute(text("UPDATE event SET subcategory = lower(trim(category)), category = 'fan event' WHERE lower(trim(category)) IN ('fan sign', 'fan meet', 'fan fest')"))
+        conn.commit()
+
+        renamed_program_events = conn.execute(
+            text("UPDATE event SET category = 'show' WHERE lower(trim(category)) = 'program'")
+        )
+        if renamed_program_events.rowcount:
+            conn.commit()
+            print(f"Migration: renamed {renamed_program_events.rowcount} event category value(s) from program to show")
+
         if "start_date" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN start_date VARCHAR"))
             conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
@@ -173,6 +189,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added original_title to project")
 
+        if "hashtag" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN hashtag VARCHAR"))
+            conn.commit()
+            print("Migration: added hashtag to project")
+
         if "slug" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN slug VARCHAR"))
             conn.commit()
@@ -192,6 +213,11 @@ def run_migrations():
             conn.execute(text("ALTER TABLE project ADD COLUMN tweet_url VARCHAR"))
             conn.commit()
             print("Migration: added tweet_url to project")
+
+        if "tweet_label" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN tweet_label VARCHAR"))
+            conn.commit()
+            print("Migration: added tweet_label to project")
 
         if "mydramalist_url" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN mydramalist_url VARCHAR"))
@@ -213,6 +239,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added youtube_url to project")
 
+        if "youtube_label" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN youtube_label VARCHAR"))
+            conn.commit()
+            print("Migration: added youtube_label to project")
+
         if "spotify_url" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN spotify_url VARCHAR"))
             conn.commit()
@@ -233,6 +264,11 @@ def run_migrations():
             conn.execute(text("UPDATE project SET is_visible = 1 WHERE is_visible IS NULL"))
             conn.commit()
             print("Migration: added is_visible to project")
+
+        if "episode_count" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN episode_count INTEGER"))
+            conn.commit()
+            print("Migration: added episode_count to project")
 
         renamed_music_projects = conn.execute(
             text("UPDATE project SET category = 'song' WHERE lower(trim(category)) = 'music'")

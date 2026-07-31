@@ -7,7 +7,7 @@ import json
 from database import get_session
 from models import Event, Author, EventAuthorLink, Project
 from middleware.auth import require_admin
-from constants import EVENT_CATEGORIES
+from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 
 router = APIRouter(prefix="/events", tags=["Events"])
 
@@ -129,6 +129,7 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
             "start_date": c.start_date or c.event_date,
             "end_date": c.end_date,
             "category": c.category,
+            "subcategory": c.subcategory,
         }
         for c in children
     ]
@@ -176,6 +177,9 @@ from pydantic import BaseModel
 
 
 VALID_CATEGORIES = set(EVENT_CATEGORIES)
+VALID_SUBCATEGORIES = {
+    category: set(values) for category, values in EVENT_SUBCATEGORIES.items()
+}
 
 
 def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
@@ -191,6 +195,7 @@ class EventCreate(BaseModel):
     location: Optional[str] = None
     keyword: Optional[str] = None
     category: Optional[str] = None
+    subcategory: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     media_focal_x: Optional[float] = None
@@ -213,6 +218,7 @@ class EventUpdate(BaseModel):
     location: Optional[str] = None
     keyword: Optional[str] = None
     category: Optional[str] = None
+    subcategory: Optional[str] = None
     tags: Optional[List[str]] = None
     media_url: Optional[str] = None
     media_focal_x: Optional[float] = None
@@ -234,7 +240,7 @@ class EventUpdate(BaseModel):
 # ----------------------------
 @router.get("/categories")
 def list_categories():
-    return {"categories": EVENT_CATEGORIES}
+    return {"categories": EVENT_CATEGORIES, "subcategories": EVENT_SUBCATEGORIES}
 
 
 @router.get("/tag-index")
@@ -250,6 +256,7 @@ def get_event_tag_index(session: Session = Depends(get_session)):
             "id": event.id,
             "tags": _safe_parse_tags(event.tags_json),
             "category": event.category,
+            "subcategory": event.subcategory,
             "start_date": event.start_date or event.event_date,
             "end_date": event.end_date,
             "project_id": event.project_id,
@@ -265,6 +272,7 @@ def list_admin_events(
     limit: int = 50,
     name: Optional[str] = None,
     category: Optional[str] = None,
+    subcategory: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(Event)
@@ -275,6 +283,8 @@ def list_admin_events(
 
     if category:
         query = query.where(Event.category == category.strip().lower())
+    if subcategory:
+        query = query.where(Event.subcategory == subcategory.strip().lower())
 
     if sort == "oldest":
         query = query.order_by(Event.start_date, Event.id)
@@ -305,6 +315,7 @@ def list_events(
     keyword: Optional[str] = None,
     tag: Optional[str] = None,
     category: Optional[str] = None,
+    subcategory: Optional[str] = None,
     author: Optional[str] = None,   # "view", "mim", or "viewmim"
     visible_start: Optional[str] = None,
     visible_end: Optional[str] = None,
@@ -325,6 +336,8 @@ def list_events(
 
     if category:
         query = query.where(Event.category == category.strip().lower())
+    if subcategory:
+        query = query.where(Event.subcategory == subcategory.strip().lower())
 
     if visible_start or visible_end:
         event_start = func.coalesce(Event.start_date, Event.event_date)
@@ -392,6 +405,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
     category = (payload.category.strip().lower() if payload.category else None)
     if category and category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+    subcategory = payload.subcategory.strip().lower() if payload.subcategory else None
+    if subcategory and subcategory not in VALID_SUBCATEGORIES.get(category, set()):
+        raise HTTPException(status_code=400, detail="Invalid subcategory for the selected category")
 
     start_date = (payload.start_date or payload.event_date or "").strip() or None
     end_date = (payload.end_date or "").strip() or None
@@ -402,6 +418,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         location=(payload.location.strip() if payload.location else None),
         keyword=(payload.keyword.strip() if payload.keyword else None),
         category=category,
+        subcategory=subcategory,
         tags_json=_safe_dump_tags(payload.tags),
         media_url=(payload.media_url.strip() if payload.media_url else None),
         media_focal_x=payload.media_focal_x,
@@ -455,11 +472,17 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if _field_was_sent(payload, "keyword"):
         ev.keyword = payload.keyword.strip() if payload.keyword else None
 
-    if _field_was_sent(payload, "category"):
-        cat = payload.category.strip().lower() if payload.category else None
+    if _field_was_sent(payload, "category") or _field_was_sent(payload, "subcategory"):
+        cat = (payload.category.strip().lower() if payload.category else None) if _field_was_sent(payload, "category") else ev.category
+        subcat = payload.subcategory.strip().lower() if _field_was_sent(payload, "subcategory") and payload.subcategory else (
+            None if _field_was_sent(payload, "subcategory") or _field_was_sent(payload, "category") else ev.subcategory
+        )
         if cat and cat not in VALID_CATEGORIES:
             raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+        if subcat and subcat not in VALID_SUBCATEGORIES.get(cat, set()):
+            raise HTTPException(status_code=400, detail="Invalid subcategory for the selected category")
         ev.category = cat
+        ev.subcategory = subcat
 
     if _field_was_sent(payload, "media_url"):
         ev.media_url = payload.media_url.strip() if payload.media_url else None

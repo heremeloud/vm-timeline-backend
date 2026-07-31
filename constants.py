@@ -6,15 +6,18 @@
 # -------------------------------------------------------
 
 EVENT_CATEGORIES: list[str] = [
-    "program",
+    "show",
     "live",
-    "interview",
     "press tour",
     "event",
-    "fan meet",
-    "fan fest",
-    "fan sign",
+    "fan event",
 ]
+
+EVENT_SUBCATEGORIES: dict[str, list[str]] = {
+    "show": ["interview", "variety", "talk"],
+    "event": ["brand event", "promotional event", "award show", "gmmtv"],
+    "fan event": ["fan sign", "fan meet", "fan fest"],
+}
 
 PROJECT_CATEGORIES: list[str] = [
     "series",

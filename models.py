@@ -221,6 +221,7 @@ class Project(SQLModel, table=True):
 
     title: str = Field(index=True)
     original_title: Optional[str] = None          # Thai title
+    hashtag: Optional[str] = Field(default=None, index=True)
     slug: Optional[str] = Field(default=None, index=True, unique=True)
     category: Optional[str] = Field(default=None, index=True)  # series, concert, movie, variety
     thumbnail_url: Optional[str] = None
@@ -228,13 +229,16 @@ class Project(SQLModel, table=True):
     thumbnail_focal_y: Optional[float] = None     # 0-100, % from top
     is_visible: bool = Field(default=True)
     year: Optional[int] = None
+    episode_count: Optional[int] = None
     description: Optional[str] = None
     parent_project_id: Optional[int] = Field(default=None, foreign_key="project.id")
     playlist_id: Optional[str] = None             # legacy single playlist ID (kept for compat)
     playlists_json: str = Field(default="[]")     # JSON array of YouTube playlist IDs
     announcement_url: Optional[str] = None        # official announcement link
     tweet_url: Optional[str] = None               # tweet with media (teaser, promo, etc.)
+    tweet_label: Optional[str] = None
     youtube_url: Optional[str] = None             # single YouTube video URL
+    youtube_label: Optional[str] = None
     mydramalist_url: Optional[str] = None         # MyDramaList page URL
     gmmtv_url: Optional[str] = None              # GMMTV official site URL
     official_twitter_url: Optional[str] = None   # official series Twitter/X account
@@ -250,6 +254,38 @@ class Project(SQLModel, table=True):
 
     events: List["Event"] = Relationship(back_populates="project")
 
+    filming_days: List["ProjectFilmingDay"] = Relationship(
+        back_populates="project",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    episode_metadata: List["ProjectEpisode"] = Relationship(
+        back_populates="project",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+
+
+class ProjectFilmingDay(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    q_number: int = Field(index=True)
+    filming_date: Optional[str] = Field(default=None, index=True)
+    hashtag: Optional[str] = Field(default=None, index=True)
+    keyword: Optional[str] = Field(default=None, index=True)
+
+    project: Optional[Project] = Relationship(back_populates="filming_days")
+
+
+class ProjectEpisode(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    episode_number: int = Field(index=True)
+    air_date: Optional[str] = Field(default=None, index=True)
+    title: Optional[str] = None
+    hashtag: Optional[str] = Field(default=None, index=True)
+    keyword: Optional[str] = Field(default=None, index=True)
+
+    project: Optional[Project] = Relationship(back_populates="episode_metadata")
+
 
 # ---------- EVENT TABLE ----------
 class Event(SQLModel, table=True):
@@ -260,7 +296,8 @@ class Event(SQLModel, table=True):
     location: Optional[str] = None                 # optional
     keyword: Optional[str] = Field(default=None, index=True)
 
-    category: Optional[str] = Field(default=None, index=True)  # e.g. program, live, interview, event, fan meet
+    category: Optional[str] = Field(default=None, index=True)  # e.g. show, live, interview, event, fan meet
+    subcategory: Optional[str] = Field(default=None, index=True)
     tags_json: str = Field(default="[]")           # list[str] stored as JSON
     media_url: Optional[str] = None                # one image url
     media_focal_x: Optional[float] = None          # 0-100, % from left
