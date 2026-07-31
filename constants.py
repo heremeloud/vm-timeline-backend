@@ -21,7 +21,7 @@ PROJECT_CATEGORIES: list[str] = [
     "concert",
     "movie",
     "variety",
-    "music",
+    "song",
     "music video",
     "other",
 ]

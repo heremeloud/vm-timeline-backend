@@ -114,6 +114,7 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
         {
             "id": e.id,
             "name": e.name,
+            "english_name": e.english_name,
             "event_date": e.event_date,
             "start_date": e.start_date or e.event_date,
             "end_date": e.end_date,

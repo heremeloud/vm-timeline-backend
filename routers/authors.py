@@ -27,6 +27,7 @@ class AuthorUpdate(SQLModel):
     mydramalist_url: Optional[str] = None
     fc_url: Optional[str] = None
     show_on_timeline: Optional[bool] = None
+    sort_order: Optional[int] = None
 
 
 # ---------------------------------------------------------
@@ -34,7 +35,7 @@ class AuthorUpdate(SQLModel):
 # ---------------------------------------------------------
 @router.get("/", response_model=list[Author])
 def get_all_authors(session: Session = Depends(get_session)):
-    return session.exec(select(Author)).all()
+    return session.exec(select(Author).order_by(Author.sort_order, Author.id)).all()
 
 
 @router.get("/{author_id}", response_model=Author)
@@ -56,6 +57,10 @@ def create_author(author: Author, session: Session = Depends(get_session)):
     if existing:
         raise HTTPException(
             status_code=400, detail="Author name already exists")
+
+    if not author.sort_order:
+        existing_authors = session.exec(select(Author)).all()
+        author.sort_order = max((item.sort_order or item.id or 0 for item in existing_authors), default=0) + 1
 
     session.add(author)
     session.commit()
@@ -122,6 +127,10 @@ def ensure_author(author: Author, session: Session = Depends(get_session)):
         Author.name == author.name)).first()
     if existing:
         return existing
+
+    if not author.sort_order:
+        existing_authors = session.exec(select(Author)).all()
+        author.sort_order = max((item.sort_order or item.id or 0 for item in existing_authors), default=0) + 1
 
     session.add(author)
     session.commit()

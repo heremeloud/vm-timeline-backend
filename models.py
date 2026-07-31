@@ -42,6 +42,7 @@ class Author(SQLModel, table=True):
     mydramalist_url: Optional[str] = None
     fc_url: Optional[str] = None             # official fan club URL
     show_on_timeline: bool = Field(default=False)
+    sort_order: int = Field(default=0, index=True)
 
     # Relationships
     posts: List["Post"] = Relationship(back_populates="author_obj")
@@ -255,6 +256,7 @@ class Event(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     name: str = Field(index=True)                  # required
+    english_name: Optional[str] = Field(default=None, index=True)
     location: Optional[str] = None                 # optional
     keyword: Optional[str] = Field(default=None, index=True)
 

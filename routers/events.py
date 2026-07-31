@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import Optional, List, Any, Dict
 import json
 
@@ -111,7 +111,7 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
     if ev.parent_event_id:
         parent_ev = session.get(Event, ev.parent_event_id)
         obj["parent_event_id"] = ev.parent_event_id
-        obj["parent_event_name"] = parent_ev.name if parent_ev else None
+        obj["parent_event_name"] = (parent_ev.english_name or parent_ev.name) if parent_ev else None
     else:
         obj["parent_event_id"] = None
         obj["parent_event_name"] = None
@@ -124,6 +124,7 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
         {
             "id": c.id,
             "name": c.name,
+            "english_name": c.english_name,
             "event_date": c.event_date,
             "start_date": c.start_date or c.event_date,
             "end_date": c.end_date,
@@ -186,6 +187,7 @@ def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
 
 class EventCreate(BaseModel):
     name: str
+    english_name: Optional[str] = None
     location: Optional[str] = None
     keyword: Optional[str] = None
     category: Optional[str] = None
@@ -207,6 +209,7 @@ class EventCreate(BaseModel):
 
 class EventUpdate(BaseModel):
     name: Optional[str] = None
+    english_name: Optional[str] = None
     location: Optional[str] = None
     keyword: Optional[str] = None
     category: Optional[str] = None
@@ -267,7 +270,8 @@ def list_admin_events(
     query = select(Event)
 
     if name:
-        query = query.where(Event.name.ilike(f"%{name.strip()}%"))
+        search_term = f"%{name.strip()}%"
+        query = query.where(or_(Event.name.ilike(search_term), Event.english_name.ilike(search_term)))
 
     if category:
         query = query.where(Event.category == category.strip().lower())
@@ -309,7 +313,8 @@ def list_events(
     query = select(Event).where(Event.is_visible == True)
 
     if name:
-        query = query.where(Event.name.ilike(f"%{name.strip()}%"))
+        search_term = f"%{name.strip()}%"
+        query = query.where(or_(Event.name.ilike(search_term), Event.english_name.ilike(search_term)))
 
     if keyword:
         query = query.where(Event.keyword == keyword)
@@ -393,6 +398,7 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
 
     ev = Event(
         name=name,
+        english_name=(payload.english_name.strip() if payload.english_name else None),
         location=(payload.location.strip() if payload.location else None),
         keyword=(payload.keyword.strip() if payload.keyword else None),
         category=category,
@@ -439,6 +445,9 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
         if not name:
             raise HTTPException(status_code=400, detail="Event name cannot be empty")
         ev.name = name
+
+    if _field_was_sent(payload, "english_name"):
+        ev.english_name = payload.english_name.strip() if payload.english_name else None
 
     if _field_was_sent(payload, "location"):
         ev.location = payload.location.strip() if payload.location else None

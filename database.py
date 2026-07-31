@@ -103,6 +103,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to event")
 
+        if "english_name" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN english_name VARCHAR"))
+            conn.commit()
+            print("Migration: added english_name to event")
+
         if "start_date" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN start_date VARCHAR"))
             conn.execute(text("UPDATE event SET start_date = event_date WHERE start_date IS NULL AND event_date IS NOT NULL"))
@@ -229,6 +234,13 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to project")
 
+        renamed_music_projects = conn.execute(
+            text("UPDATE project SET category = 'song' WHERE lower(trim(category)) = 'music'")
+        )
+        if renamed_music_projects.rowcount:
+            conn.commit()
+            print(f"Migration: renamed {renamed_music_projects.rowcount} project category value(s) from music to song")
+
         if "thumbnail_focal_x" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN thumbnail_focal_x REAL"))
             conn.commit()
@@ -267,6 +279,12 @@ def run_migrations():
             conn.execute(text("ALTER TABLE author ADD COLUMN tiktok_url VARCHAR"))
             conn.commit()
             print("Migration: added tiktok_url to author")
+
+        if "sort_order" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE author SET sort_order = id WHERE sort_order IS NULL OR sort_order = 0"))
+            conn.commit()
+            print("Migration: added sort_order to author")
 
         if "gmmtv_url" not in author_cols:
             conn.execute(text("ALTER TABLE author ADD COLUMN gmmtv_url VARCHAR"))
