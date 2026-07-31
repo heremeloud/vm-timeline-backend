@@ -68,6 +68,7 @@ class Post(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     platform: str  # "instagram", "x", "tt" etc.
+    content_type: str = Field(default="post")  # "post", "story", or "broadcast"
     external_url: str
     external_id: str
 

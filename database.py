@@ -37,6 +37,12 @@ def run_migrations():
         result = conn.execute(text("PRAGMA table_info(post)"))
         post_cols = {row[1] for row in result}
 
+        if "content_type" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN content_type VARCHAR DEFAULT 'post'"))
+            conn.execute(text("UPDATE post SET content_type = CASE WHEN platform = 'ig' AND trim(coalesce(external_url, '')) = '' THEN 'story' ELSE 'post' END WHERE content_type IS NULL OR content_type = 'post'"))
+            conn.commit()
+            print("Migration: added content_type to post")
+
         if "media_urls_json" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN media_urls_json VARCHAR DEFAULT '[]'"))
             conn.commit()

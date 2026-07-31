@@ -278,8 +278,15 @@ def list_admin_events(
     query = select(Event)
 
     if name:
-        search_term = f"%{name.strip()}%"
-        query = query.where(or_(Event.name.ilike(search_term), Event.english_name.ilike(search_term)))
+        raw_term = name.strip()
+        search_term = f"%{raw_term}%"
+        tag_term = f"%{raw_term.lstrip('#')}%"
+        query = query.where(or_(
+            Event.name.ilike(search_term),
+            Event.english_name.ilike(search_term),
+            Event.keyword.ilike(search_term),
+            Event.tags_json.ilike(tag_term),
+        ))
 
     if category:
         query = query.where(Event.category == category.strip().lower())
@@ -324,8 +331,15 @@ def list_events(
     query = select(Event).where(Event.is_visible == True)
 
     if name:
-        search_term = f"%{name.strip()}%"
-        query = query.where(or_(Event.name.ilike(search_term), Event.english_name.ilike(search_term)))
+        raw_term = name.strip()
+        search_term = f"%{raw_term}%"
+        tag_term = f"%{raw_term.lstrip('#')}%"
+        query = query.where(or_(
+            Event.name.ilike(search_term),
+            Event.english_name.ilike(search_term),
+            Event.keyword.ilike(search_term),
+            Event.tags_json.ilike(tag_term),
+        ))
 
     if keyword:
         query = query.where(Event.keyword == keyword)

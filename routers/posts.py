@@ -96,6 +96,7 @@ def search_admin_posts(
             Post.caption_translation.ilike(pattern),
             Post.caption_translation_note.ilike(pattern),
             Post.external_url.ilike(pattern),
+            Post.media_urls_json.ilike(pattern),
         )
     )
 
@@ -123,6 +124,9 @@ def search_admin_posts(
         obj["result_type"] = "post" if post.parent_id is None else "x-reply"
         obj["target_post_id"] = post.id if post.parent_id is None else post.parent_id
         obj["match_text"] = post.caption or post.caption_translation or post.caption_translation_note or post.external_url
+        if not obj["match_text"] and post.content_type == "broadcast":
+            messages = obj.get("media_urls", [])
+            obj["match_text"] = next((message.get("text") or message.get("translation") for message in messages if isinstance(message, dict)), None)
         results.append(obj)
 
     for text in text_matches:
@@ -137,6 +141,7 @@ def search_admin_posts(
             "result_type": text.type,
             "target_post_id": post.id,
             "post_platform": post.platform,
+            "post_content_type": post.content_type,
             "post_author_name": post_author.name if post_author else None,
             "author_id": text.author_id,
             "author_name": author.name if author else None,
