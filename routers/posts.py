@@ -10,6 +10,14 @@ from middleware.auth import require_admin
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
 
+def _filter_post_platform(query, platform: str | None):
+    if not platform or platform == "all":
+        return query
+    if platform == "bc":
+        return query.where(Post.platform == "ig", Post.content_type == "broadcast")
+    return query.where(Post.platform == platform)
+
+
 def _enrich(p: Post, author: Author | None) -> dict:
     """Return a post dict with author info and parsed media_urls list."""
     obj = p.dict()
@@ -19,6 +27,7 @@ def _enrich(p: Post, author: Author | None) -> dict:
     obj["author_twitter_pfp_url"] = author.twitter_pfp_url if author else None
     obj["author_tiktok_pfp_url"] = author.tiktok_pfp_url if author else None
     obj["author_instagram_url"] = author.instagram_url if author else None
+    obj["author_broadcast_channel_name"] = author.broadcast_channel_name if author else None
     # Parse stored JSON array; fall back to [] on bad data
     try:
         raw = json.loads(p.media_urls_json or "[]")
@@ -57,8 +66,7 @@ def get_admin_posts(
 ):
     query = select(Post).where(Post.parent_id == None)
 
-    if platform:
-        query = query.where(Post.platform == platform)
+    query = _filter_post_platform(query, platform)
 
     if sort == "newest":
         query = query.order_by(desc(Post.posted_at), desc(Post.id))
@@ -109,8 +117,8 @@ def search_admin_posts(
     )
 
     if platform and platform != "all":
-        post_query = post_query.where(Post.platform == platform)
-        text_query = text_query.join(Post).where(Post.platform == platform)
+        post_query = _filter_post_platform(post_query, platform)
+        text_query = _filter_post_platform(text_query.join(Post), platform)
 
     post_matches = session.exec(post_query).all()
     text_matches = session.exec(text_query).all()
@@ -187,8 +195,7 @@ def get_timeline(
             Author.show_on_timeline == True,
         )
     )
-    if platform:
-        query = query.where(Post.platform == platform)
+    query = _filter_post_platform(query, platform)
 
     if sort == "newest":
         query = query.order_by(desc(Post.posted_at), desc(Post.id))
@@ -314,8 +321,7 @@ def get_posts(
         )
     )
 
-    if platform:
-        query = query.where(Post.platform == platform)
+    query = _filter_post_platform(query, platform)
 
     # Sorting
     if sort == "newest":

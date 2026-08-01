@@ -22,6 +22,7 @@ class AuthorUpdate(SQLModel):
     birthday: Optional[str] = None
     twitter_url: Optional[str] = None
     instagram_url: Optional[str] = None
+    broadcast_channel_name: Optional[str] = None
     tiktok_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
     mydramalist_url: Optional[str] = None

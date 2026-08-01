@@ -33,6 +33,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added tiktok_pfp_url to author")
 
+        if "broadcast_channel_name" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN broadcast_channel_name VARCHAR"))
+            conn.commit()
+            print("Migration: added broadcast_channel_name to author")
+
         # ── post table ──────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(post)"))
         post_cols = {row[1] for row in result}
