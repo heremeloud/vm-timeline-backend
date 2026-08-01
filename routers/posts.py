@@ -15,6 +15,10 @@ def _filter_post_platform(query, platform: str | None):
         return query
     if platform == "bc":
         return query.where(Post.platform == "ig", Post.content_type == "broadcast")
+    if platform == "igs":
+        return query.where(Post.platform == "ig", Post.content_type == "story")
+    if platform == "ig-post":
+        return query.where(Post.platform == "ig", Post.content_type == "post")
     return query.where(Post.platform == platform)
 
 

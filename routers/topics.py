@@ -162,9 +162,9 @@ def list_admin_topics(session: Session = Depends(get_session)):
     return [_serialize_topic(session, topic, include_items=False) for topic in topics]
 
 
-@router.get("/admin/{topic_id}", dependencies=[Depends(require_admin)])
-def get_admin_topic(topic_id: int, session: Session = Depends(get_session)):
-    topic = session.get(Topic, topic_id)
+@router.get("/admin/{topic_ref}", dependencies=[Depends(require_admin)])
+def get_admin_topic(topic_ref: str, session: Session = Depends(get_session)):
+    topic = _get_topic_by_ref(session, topic_ref)
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     return {"topic": _serialize_topic(session, topic)}

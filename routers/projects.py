@@ -323,9 +323,9 @@ def list_admin_projects(
     return [_serialize_project(session, p) for p in projects]
 
 
-@router.get("/admin/{project_id}", dependencies=[Depends(require_admin)])
-def get_admin_project(project_id: int, session: Session = Depends(get_session)):
-    p = session.get(Project, project_id)
+@router.get("/admin/{project_ref}", dependencies=[Depends(require_admin)])
+def get_admin_project(project_ref: str, session: Session = Depends(get_session)):
+    p = _get_project_by_ref(session, project_ref)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
     return {"project": _serialize_project(session, p)}
