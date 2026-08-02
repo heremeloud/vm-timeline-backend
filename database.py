@@ -64,6 +64,22 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to post")
 
+        if "sort_order" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            conn.execute(text("""
+                UPDATE post
+                SET sort_order = (
+                    SELECT COUNT(*)
+                    FROM post AS same_date
+                    WHERE same_date.parent_id IS NULL
+                      AND coalesce(same_date.posted_at, '') = coalesce(post.posted_at, '')
+                      AND same_date.id > post.id
+                )
+                WHERE post.parent_id IS NULL
+            """))
+            conn.commit()
+            print("Migration: added sort_order to post")
+
         # ── posttext table ──────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(posttext)"))
         posttext_cols = {row[1] for row in result}

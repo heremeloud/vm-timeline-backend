@@ -2,12 +2,17 @@ import json
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
-from sqlmodel import Session, select, desc
+from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
 from models import Post, PostText, Author
 from middleware.auth import require_admin
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
+
+
+class PostReorder(SQLModel):
+    target_post_id: int
+    position: str
 
 
 def _filter_post_platform(query, platform: str | None):
@@ -82,9 +87,9 @@ def get_admin_posts(
         query = query.where(Post.posted_at <= date_to.strip())
 
     if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
     else:
-        query = query.order_by(Post.posted_at, Post.id)
+        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
 
     posts = session.exec(query.offset(offset).limit(limit)).all()
 
@@ -99,6 +104,7 @@ def get_admin_posts(
 @router.get("/admin/search")
 def search_admin_posts(
     q: str,
+    sort: str = "newest",
     platform: str | None = None,
     author_id: int | None = None,
     date_from: str | None = None,
@@ -224,8 +230,45 @@ def search_admin_posts(
             "match_text": match_text,
         })
 
-    results.sort(key=lambda item: (item.get("posted_at") or "", item.get("result_id") or ""), reverse=True)
+    results.sort(
+        key=lambda item: (item.get("posted_at") or "", item.get("result_id") or ""),
+        reverse=sort == "newest",
+    )
     return results[offset:offset + limit]
+
+
+@router.post("/admin/{post_id}/order", dependencies=[Depends(require_admin)])
+def reorder_post(
+    post_id: int,
+    payload: PostReorder,
+    session: Session = Depends(get_session),
+):
+    if payload.position not in {"before", "after"}:
+        raise HTTPException(status_code=400, detail="Position must be before or after")
+
+    moved = session.get(Post, post_id)
+    target = session.get(Post, payload.target_post_id)
+    if not moved or not target or moved.parent_id is not None or target.parent_id is not None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if (moved.posted_at or "") != (target.posted_at or ""):
+        raise HTTPException(status_code=400, detail="Posts can only be reordered within the same date")
+    if moved.id == target.id:
+        return {"status": "unchanged"}
+
+    posts = session.exec(
+        select(Post)
+        .where(Post.parent_id == None, Post.posted_at == moved.posted_at)
+        .order_by(Post.sort_order, desc(Post.id))
+    ).all()
+
+    posts.remove(moved)
+    target_index = posts.index(target)
+    posts.insert(target_index + (1 if payload.position == "after" else 0), moved)
+    for index, post in enumerate(posts):
+        post.sort_order = index
+        session.add(post)
+    session.commit()
+    return {"status": "reordered", "post_id": post_id, "sort_order": moved.sort_order}
 
 
 @router.get("/admin/{post_id}")
@@ -240,6 +283,23 @@ def get_admin_post(
 
     author = session.get(Author, post.author_id) if post.author_id else None
     return {"post": _enrich(post, author)}
+
+
+@router.get("/admin/{post_id}/thread")
+def get_admin_thread(
+    post_id: int,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    replies = session.exec(
+        select(Post)
+        .where(Post.parent_id == post_id)
+        .order_by(Post.posted_at, Post.id)
+    ).all()
+    return [
+        _enrich(reply, session.get(Author, reply.author_id) if reply.author_id else None)
+        for reply in replies
+    ]
 
 
 @router.get("/timeline")
@@ -263,9 +323,9 @@ def get_timeline(
     query = _filter_post_platform(query, platform)
 
     if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
     else:
-        query = query.order_by(Post.posted_at, Post.id)
+        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
 
     # Fetch one extra row so the client knows whether a next page exists.
     page_rows = session.exec(query.offset(offset).limit(limit + 1)).all()
@@ -359,6 +419,14 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
+    if post.parent_id is None:
+        current_first = session.exec(
+            select(Post)
+            .where(Post.parent_id == None, Post.posted_at == post.posted_at)
+            .order_by(Post.sort_order)
+            .limit(1)
+        ).first()
+        post.sort_order = (current_first.sort_order - 1) if current_first else 0
     session.add(post)
     session.commit()
     session.refresh(post)
@@ -390,9 +458,9 @@ def get_posts(
 
     # Sorting
     if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), desc(Post.id))
+        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
     else:
-        query = query.order_by(Post.posted_at, Post.id)
+        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
 
     # Apply pagination
     query = query.offset(offset).limit(limit)
@@ -508,6 +576,16 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
     post = session.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    next_posted_at = updates.get("posted_at")
+    if post.parent_id is None and next_posted_at is not None and next_posted_at != post.posted_at:
+        current_first = session.exec(
+            select(Post)
+            .where(Post.parent_id == None, Post.posted_at == next_posted_at, Post.id != post.id)
+            .order_by(Post.sort_order)
+            .limit(1)
+        ).first()
+        updates["sort_order"] = (current_first.sort_order - 1) if current_first else 0
 
     # Apply updates dynamically
     for key, value in updates.items():

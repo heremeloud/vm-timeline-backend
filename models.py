@@ -80,6 +80,7 @@ class Post(SQLModel, table=True):
     caption_translation_note: Optional[str] = None   # optional translator's note
 
     posted_at: Optional[str] = None
+    sort_order: int = Field(default=0, index=True)
     media_url: Optional[str] = None
 
     media_urls_json: str = Field(default="[]")  # JSON array of media URLs for story carousels

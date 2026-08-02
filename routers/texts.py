@@ -103,6 +103,8 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
         parent.media_url = payload["media_url"] or None
     if "author_id" in payload:
         parent.author_id = payload["author_id"]
+    if "posted_at" in payload:
+        parent.posted_at = payload["posted_at"] or None
 
     session.commit()
     return {"message": "Reply updated"}
