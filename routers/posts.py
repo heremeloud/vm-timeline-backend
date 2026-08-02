@@ -103,6 +103,11 @@ def search_admin_posts(
     author_id: int | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    include_text: bool = True,
+    include_translations: bool = True,
+    include_notes: bool = True,
+    include_urls: bool = True,
+    include_replies: bool = True,
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
@@ -114,46 +119,57 @@ def search_admin_posts(
 
     pattern = f"%{term}%"
 
-    post_query = select(Post).where(
-        or_(
-            Post.caption.ilike(pattern),
-            Post.caption_translation.ilike(pattern),
-            Post.caption_translation_note.ilike(pattern),
-            Post.external_url.ilike(pattern),
-            Post.media_urls_json.ilike(pattern),
-        )
-    )
+    post_conditions = []
+    if include_text:
+        post_conditions.append(Post.caption.ilike(pattern))
+    if include_translations:
+        post_conditions.append(Post.caption_translation.ilike(pattern))
+    if include_notes:
+        post_conditions.append(Post.caption_translation_note.ilike(pattern))
+    if include_urls:
+        post_conditions.extend((Post.external_url.ilike(pattern), Post.media_urls_json.ilike(pattern)))
+    if not post_conditions:
+        return []
 
-    text_query = select(PostText).where(
-        or_(
-            PostText.content.ilike(pattern),
-            PostText.translation.ilike(pattern),
-            PostText.note.ilike(pattern),
-        )
-    )
+    post_query = select(Post).where(or_(*post_conditions))
+    if not include_replies:
+        post_query = post_query.where(Post.parent_id == None)
 
-    if (platform and platform != "all") or author_id is not None or date_from or date_to:
+    text_conditions = []
+    if include_text:
+        text_conditions.append(PostText.content.ilike(pattern))
+    if include_translations:
+        text_conditions.append(PostText.translation.ilike(pattern))
+    if include_notes:
+        text_conditions.append(PostText.note.ilike(pattern))
+    text_query = select(PostText).where(or_(*text_conditions)) if include_replies and text_conditions else None
+
+    if text_query is not None and ((platform and platform != "all") or author_id is not None or date_from or date_to):
         text_query = text_query.join(Post)
 
     if platform and platform != "all":
         post_query = _filter_post_platform(post_query, platform)
-        text_query = _filter_post_platform(text_query, platform)
+        if text_query is not None:
+            text_query = _filter_post_platform(text_query, platform)
 
     if author_id is not None:
         post_query = post_query.where(Post.author_id == author_id)
-        text_query = text_query.where(Post.author_id == author_id)
+        if text_query is not None:
+            text_query = text_query.where(Post.author_id == author_id)
 
     if date_from:
         start = date_from.strip()
         post_query = post_query.where(Post.posted_at >= start)
-        text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) >= start)
+        if text_query is not None:
+            text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) >= start)
     if date_to:
         end = date_to.strip()
         post_query = post_query.where(Post.posted_at <= end)
-        text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) <= end)
+        if text_query is not None:
+            text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) <= end)
 
     post_matches = session.exec(post_query).all()
-    text_matches = session.exec(text_query).all()
+    text_matches = session.exec(text_query).all() if text_query is not None else []
 
     results = []
 
@@ -163,7 +179,16 @@ def search_admin_posts(
         obj["result_id"] = f"post-{post.id}"
         obj["result_type"] = "post" if post.parent_id is None else "x-reply"
         obj["target_post_id"] = post.id if post.parent_id is None else post.parent_id
-        obj["match_text"] = post.caption or post.caption_translation or post.caption_translation_note or post.external_url
+        selected_match_fields = []
+        if include_text:
+            selected_match_fields.append(post.caption)
+        if include_translations:
+            selected_match_fields.append(post.caption_translation)
+        if include_notes:
+            selected_match_fields.append(post.caption_translation_note)
+        if include_urls:
+            selected_match_fields.append(post.external_url)
+        obj["match_text"] = next((value for value in selected_match_fields if value and term.lower() in value.lower()), None)
         if not obj["match_text"] and post.content_type == "broadcast":
             messages = obj.get("media_urls", [])
             obj["match_text"] = next((message.get("text") or message.get("translation") for message in messages if isinstance(message, dict)), None)
@@ -175,6 +200,14 @@ def search_admin_posts(
             continue
         author = session.get(Author, text.author_id) if text.author_id else None
         post_author = session.get(Author, post.author_id) if post.author_id else None
+        selected_text_fields = []
+        if include_text:
+            selected_text_fields.append(text.content)
+        if include_translations:
+            selected_text_fields.append(text.translation)
+        if include_notes:
+            selected_text_fields.append(text.note)
+        match_text = next((value for value in selected_text_fields if value and term.lower() in value.lower()), None)
         results.append({
             "id": text.id,
             "result_id": f"text-{text.id}",
@@ -188,7 +221,7 @@ def search_admin_posts(
             "posted_at": text.posted_at or post.posted_at,
             "is_visible": post.is_visible,
             "external_url": post.external_url,
-            "match_text": text.content or text.translation or text.note,
+            "match_text": match_text,
         })
 
     results.sort(key=lambda item: (item.get("posted_at") or "", item.get("result_id") or ""), reverse=True)
