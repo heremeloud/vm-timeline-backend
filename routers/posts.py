@@ -1,7 +1,7 @@
 import json
 from collections import defaultdict
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlmodel import Session, select, desc
 from database import get_session
 from models import Post, PostText, Author
@@ -63,6 +63,8 @@ def _enrich_text(text: PostText, author: Author | None) -> dict:
 def get_admin_posts(
     platform: str | None = None,
     author_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     sort: str = "newest",
     offset: int = 0,
     limit: int = 100,
@@ -74,6 +76,10 @@ def get_admin_posts(
     query = _filter_post_platform(query, platform)
     if author_id is not None:
         query = query.where(Post.author_id == author_id)
+    if date_from:
+        query = query.where(Post.posted_at >= date_from.strip())
+    if date_to:
+        query = query.where(Post.posted_at <= date_to.strip())
 
     if sort == "newest":
         query = query.order_by(desc(Post.posted_at), desc(Post.id))
@@ -95,6 +101,8 @@ def search_admin_posts(
     q: str,
     platform: str | None = None,
     author_id: int | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
@@ -124,7 +132,7 @@ def search_admin_posts(
         )
     )
 
-    if (platform and platform != "all") or author_id is not None:
+    if (platform and platform != "all") or author_id is not None or date_from or date_to:
         text_query = text_query.join(Post)
 
     if platform and platform != "all":
@@ -134,6 +142,15 @@ def search_admin_posts(
     if author_id is not None:
         post_query = post_query.where(Post.author_id == author_id)
         text_query = text_query.where(Post.author_id == author_id)
+
+    if date_from:
+        start = date_from.strip()
+        post_query = post_query.where(Post.posted_at >= start)
+        text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) >= start)
+    if date_to:
+        end = date_to.strip()
+        post_query = post_query.where(Post.posted_at <= end)
+        text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) <= end)
 
     post_matches = session.exec(post_query).all()
     text_matches = session.exec(text_query).all()
