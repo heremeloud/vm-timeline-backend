@@ -39,7 +39,7 @@ def media_kind(platform: str, content_type: str | None) -> str:
 def destination_configs() -> dict[str, dict[str, str]]:
     configs = {}
     for label, bucket_var, url_var in (
-        ("primary", "R2_VM_VIDEO_BUCKET", "R2_VM_VIDEO_PUBLIC_URL"),
+        ("primary", "R2_VM_BUCKET", "R2_VM_PUBLIC_URL"),
         ("related", "R2_RELATED_BUCKET", "R2_RELATED_PUBLIC_URL"),
         ("vimmy", "R2_VIMMY_BUCKET", "R2_VIMMY_PUBLIC_URL"),
     ):

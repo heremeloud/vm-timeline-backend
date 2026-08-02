@@ -196,8 +196,8 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
 
     seen_episodes = set()
     for row in episodes or []:
-        if row.episode_number < 1 or row.episode_number in seen_episodes:
-            raise HTTPException(status_code=400, detail="Episode numbers must be positive and unique")
+        if row.episode_number < 0 or row.episode_number in seen_episodes:
+            raise HTTPException(status_code=400, detail="Episode numbers must be zero or greater and unique")
         seen_episodes.add(row.episode_number)
         session.add(ProjectEpisode(
             project_id=project_id,

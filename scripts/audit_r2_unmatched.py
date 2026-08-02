@@ -64,7 +64,7 @@ def main() -> int:
     )
 
     for label, bucket_var, url_var in (
-        ("vm-video", "R2_VM_VIDEO_BUCKET", "R2_VM_VIDEO_PUBLIC_URL"),
+        ("vm-social-media", "R2_VM_BUCKET", "R2_VM_PUBLIC_URL"),
         ("vm-video-related", "R2_RELATED_BUCKET", "R2_RELATED_PUBLIC_URL"),
         ("vimmy-video", "R2_VIMMY_BUCKET", "R2_VIMMY_PUBLIC_URL"),
     ):

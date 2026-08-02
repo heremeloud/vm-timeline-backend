@@ -1,11 +1,12 @@
 import os
 import re
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from pydantic import BaseModel
 
 from middleware.auth import require_admin
 
@@ -15,11 +16,15 @@ ALLOWED_CONTENT_PREFIXES = ("image/", "video/")
 DEFAULT_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 
+class MediaDeleteRequest(BaseModel):
+    url: str
+
+
 def _destinations() -> dict[str, dict[str, str | None]]:
     return {
         "primary": {
-            "bucket": os.getenv("R2_VM_VIDEO_BUCKET"),
-            "public_url": os.getenv("R2_VM_VIDEO_PUBLIC_URL"),
+            "bucket": os.getenv("R2_VM_BUCKET"),
+            "public_url": os.getenv("R2_VM_PUBLIC_URL"),
         },
         "related": {
             "bucket": os.getenv("R2_RELATED_BUCKET"),
@@ -28,6 +33,10 @@ def _destinations() -> dict[str, dict[str, str | None]]:
         "vimmy": {
             "bucket": os.getenv("R2_VIMMY_BUCKET"),
             "public_url": os.getenv("R2_VIMMY_PUBLIC_URL"),
+        },
+        "test": {
+            "bucket": os.getenv("R2_TEST_BUCKET"),
+            "public_url": os.getenv("R2_TEST_PUBLIC_URL"),
         },
     }
 
@@ -78,6 +87,42 @@ def _file_size(file: UploadFile) -> int:
     return size
 
 
+def _r2_client():
+    account_id = _required_env("R2_ACCOUNT_ID")
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        region_name="auto",
+        aws_access_key_id=_required_env("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=_required_env("R2_SECRET_ACCESS_KEY"),
+    )
+
+
+def _resolve_public_object(url: str) -> tuple[str, str, str]:
+    target = urlsplit(url.strip())
+    if target.scheme not in {"http", "https"} or not target.netloc:
+        raise HTTPException(status_code=400, detail="A valid public media URL is required")
+
+    for destination, config in _destinations().items():
+        bucket = (config.get("bucket") or "").strip()
+        public_url = (config.get("public_url") or "").strip().rstrip("/")
+        if not bucket or not public_url:
+            continue
+
+        base = urlsplit(public_url)
+        base_path = base.path.rstrip("/")
+        object_prefix = f"{base_path}/"
+        if target.scheme != base.scheme or target.netloc != base.netloc or not target.path.startswith(object_prefix):
+            continue
+
+        object_key = unquote(target.path[len(object_prefix):])
+        if not object_key or object_key.startswith("/") or any(part in {"", ".", ".."} for part in object_key.split("/")):
+            raise HTTPException(status_code=400, detail="The media URL does not contain a valid R2 object key")
+        return destination, bucket, object_key
+
+    raise HTTPException(status_code=400, detail="This URL does not match a configured R2 destination")
+
+
 @router.post("/upload", dependencies=[Depends(require_admin)])
 def upload_media(
     destination: str = Form(...),
@@ -112,14 +157,7 @@ def upload_media(
         raise HTTPException(status_code=413, detail=f"File exceeds the {max_mb} MB upload limit")
 
     object_key = _object_key(author, posted_at, media_type, sequence, file.filename)
-    account_id = _required_env("R2_ACCOUNT_ID")
-    client = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        region_name="auto",
-        aws_access_key_id=_required_env("R2_ACCESS_KEY_ID"),
-        aws_secret_access_key=_required_env("R2_SECRET_ACCESS_KEY"),
-    )
+    client = _r2_client()
 
     try:
         try:
@@ -151,3 +189,21 @@ def upload_media(
         "size": size,
         "content_type": content_type,
     }
+
+
+@router.delete("/object", dependencies=[Depends(require_admin)])
+def delete_media_object(payload: MediaDeleteRequest):
+    destination, bucket, object_key = _resolve_public_object(payload.url)
+    client = _r2_client()
+
+    try:
+        client.head_object(Bucket=bucket, Key=object_key)
+        client.delete_object(Bucket=bucket, Key=object_key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            raise HTTPException(status_code=404, detail="The R2 object was not found") from exc
+        raise HTTPException(status_code=502, detail="R2 deletion failed") from exc
+    except BotoCoreError as exc:
+        raise HTTPException(status_code=502, detail="R2 deletion failed") from exc
+
+    return {"deleted": True, "destination": destination, "key": object_key}

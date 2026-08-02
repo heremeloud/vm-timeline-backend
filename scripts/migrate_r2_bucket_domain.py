@@ -37,7 +37,7 @@ def main() -> int:
     load_dotenv(BACKEND_DIR / ".env")
     old_base = args.old_public_url.rstrip("/")
     bucket_var, public_url_var = {
-        "primary": ("R2_VM_VIDEO_BUCKET", "R2_VM_VIDEO_PUBLIC_URL"),
+        "primary": ("R2_VM_BUCKET", "R2_VM_PUBLIC_URL"),
         "related": ("R2_RELATED_BUCKET", "R2_RELATED_PUBLIC_URL"),
         "vimmy": ("R2_VIMMY_BUCKET", "R2_VIMMY_PUBLIC_URL"),
     }[args.destination]
