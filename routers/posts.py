@@ -62,6 +62,7 @@ def _enrich_text(text: PostText, author: Author | None) -> dict:
 @router.get("/admin")
 def get_admin_posts(
     platform: str | None = None,
+    author_id: int | None = None,
     sort: str = "newest",
     offset: int = 0,
     limit: int = 100,
@@ -71,6 +72,8 @@ def get_admin_posts(
     query = select(Post).where(Post.parent_id == None)
 
     query = _filter_post_platform(query, platform)
+    if author_id is not None:
+        query = query.where(Post.author_id == author_id)
 
     if sort == "newest":
         query = query.order_by(desc(Post.posted_at), desc(Post.id))
@@ -91,6 +94,7 @@ def get_admin_posts(
 def search_admin_posts(
     q: str,
     platform: str | None = None,
+    author_id: int | None = None,
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
@@ -120,9 +124,16 @@ def search_admin_posts(
         )
     )
 
+    if (platform and platform != "all") or author_id is not None:
+        text_query = text_query.join(Post)
+
     if platform and platform != "all":
         post_query = _filter_post_platform(post_query, platform)
-        text_query = _filter_post_platform(text_query.join(Post), platform)
+        text_query = _filter_post_platform(text_query, platform)
+
+    if author_id is not None:
+        post_query = post_query.where(Post.author_id == author_id)
+        text_query = text_query.where(Post.author_id == author_id)
 
     post_matches = session.exec(post_query).all()
     text_matches = session.exec(text_query).all()

@@ -239,6 +239,8 @@ build/
 .env
 .env.local
 .env.*.local
+vm-social.pre-r2-migration-*.db
+vm-social.pre-bucket-domain-*.db
 
 # Editor directories and settings
 .vscode/

@@ -13,3 +13,4 @@ python-jose[cryptography]
 pydantic
 pydantic-settings
 certifi
+boto3
