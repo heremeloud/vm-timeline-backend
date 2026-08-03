@@ -1,5 +1,6 @@
 import json
 from collections import defaultdict
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_
 from sqlmodel import Session, SQLModel, select, desc
@@ -8,6 +9,28 @@ from models import Post, PostText, Author
 from middleware.auth import require_admin
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
+
+
+def _normalize_utc_timestamp(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="posted_at_utc must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise HTTPException(status_code=422, detail="posted_at_utc must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _validate_reply_timing(reply_date: str | None, reply_utc: str | None, parent: Post) -> None:
+    if reply_date and parent.posted_at and reply_date < parent.posted_at:
+        raise HTTPException(status_code=422, detail="A reply cannot be dated before its parent post")
+    if reply_utc and parent.posted_at_utc:
+        reply_time = datetime.fromisoformat(reply_utc.replace("Z", "+00:00"))
+        parent_time = datetime.fromisoformat(parent.posted_at_utc.replace("Z", "+00:00"))
+        if reply_time <= parent_time:
+            raise HTTPException(status_code=422, detail="A reply's exact time must be later than its parent post")
 
 
 class PostReorder(SQLModel):
@@ -25,6 +48,33 @@ def _filter_post_platform(query, platform: str | None):
     if platform == "ig-post":
         return query.where(Post.platform == "ig", Post.content_type == "post")
     return query.where(Post.platform == platform)
+
+
+def _order_posts(query, sort: str = "newest"):
+    """Use exact time when known; retain manual ordering as the date-only fallback."""
+    # A date-only record is treated as Bangkok midnight for its chronological
+    # position. Its existing sort_order remains the tie-breaker.
+    fallback_utc = func.strftime("%Y-%m-%dT%H:%M:%fZ", Post.posted_at, "-7 hours")
+    chronological_time = func.coalesce(Post.posted_at_utc, fallback_utc)
+    if sort == "newest":
+        return query.order_by(
+            desc(chronological_time),
+            Post.sort_order,
+            desc(Post.id),
+        )
+    return query.order_by(
+        chronological_time,
+        desc(Post.sort_order),
+        Post.id,
+    )
+
+
+def _order_replies(query):
+    fallback_utc = func.strftime("%Y-%m-%dT%H:%M:%fZ", Post.posted_at, "-7 hours")
+    return query.order_by(
+        func.coalesce(Post.posted_at_utc, fallback_utc),
+        Post.id,
+    )
 
 
 def _enrich(p: Post, author: Author | None) -> dict:
@@ -86,10 +136,7 @@ def get_admin_posts(
     if date_to:
         query = query.where(Post.posted_at <= date_to.strip())
 
-    if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
-    else:
-        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
+    query = _order_posts(query, sort)
 
     posts = session.exec(query.offset(offset).limit(limit)).all()
 
@@ -132,6 +179,7 @@ def search_admin_posts(
         post_conditions.append(Post.caption_translation.ilike(pattern))
     if include_notes:
         post_conditions.append(Post.caption_translation_note.ilike(pattern))
+        post_conditions.append(Post.timeline_context.ilike(pattern))
     if include_urls:
         post_conditions.extend((Post.external_url.ilike(pattern), Post.media_urls_json.ilike(pattern)))
     if not post_conditions:
@@ -192,6 +240,7 @@ def search_admin_posts(
             selected_match_fields.append(post.caption_translation)
         if include_notes:
             selected_match_fields.append(post.caption_translation_note)
+            selected_match_fields.append(post.timeline_context)
         if include_urls:
             selected_match_fields.append(post.external_url)
         obj["match_text"] = next((value for value in selected_match_fields if value and term.lower() in value.lower()), None)
@@ -291,11 +340,9 @@ def get_admin_thread(
     session: Session = Depends(get_session),
     _: bool = Depends(require_admin),
 ):
-    replies = session.exec(
-        select(Post)
-        .where(Post.parent_id == post_id)
-        .order_by(Post.posted_at, Post.id)
-    ).all()
+    replies = session.exec(_order_replies(
+        select(Post).where(Post.parent_id == post_id)
+    )).all()
     return [
         _enrich(reply, session.get(Author, reply.author_id) if reply.author_id else None)
         for reply in replies
@@ -322,10 +369,7 @@ def get_timeline(
     )
     query = _filter_post_platform(query, platform)
 
-    if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
-    else:
-        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
+    query = _order_posts(query, sort)
 
     # Fetch one extra row so the client knows whether a next page exists.
     page_rows = session.exec(query.offset(offset).limit(limit + 1)).all()
@@ -339,7 +383,7 @@ def get_timeline(
         comments = session.exec(
             select(PostText).where(PostText.post_id.in_(post_ids))
         ).all()
-        replies = session.exec(
+        reply_query = (
             select(Post)
             .join(Author)
             .where(
@@ -347,8 +391,8 @@ def get_timeline(
                 Post.is_visible == True,
                 Author.show_on_timeline == True,
             )
-            .order_by(Post.posted_at, Post.id)
-        ).all()
+        )
+        replies = session.exec(_order_replies(reply_query)).all()
 
     author_ids = {
         item.author_id
@@ -381,7 +425,7 @@ def get_timeline(
         obj["childrenPosts"] = replies_by_post[post.id]
         items.append(obj)
 
-    newest = session.exec(
+    newest_query = (
         select(Post)
         .join(Author)
         .where(
@@ -389,9 +433,8 @@ def get_timeline(
             Post.is_visible == True,
             Author.show_on_timeline == True,
         )
-        .order_by(desc(Post.posted_at), desc(Post.id))
-        .limit(1)
-    ).first()
+    )
+    newest = session.exec(_order_posts(newest_query, "newest").limit(1)).first()
 
     return {
         "items": items,
@@ -419,6 +462,12 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
+    post.posted_at_utc = _normalize_utc_timestamp(post.posted_at_utc)
+    if post.parent_id is not None:
+        parent = session.get(Post, post.parent_id)
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent post not found")
+        _validate_reply_timing(post.posted_at, post.posted_at_utc, parent)
     if post.parent_id is None:
         current_first = session.exec(
             select(Post)
@@ -456,11 +505,7 @@ def get_posts(
 
     query = _filter_post_platform(query, platform)
 
-    # Sorting
-    if sort == "newest":
-        query = query.order_by(desc(Post.posted_at), Post.sort_order, desc(Post.id))
-    else:
-        query = query.order_by(Post.posted_at, desc(Post.sort_order), Post.id)
+    query = _order_posts(query, sort)
 
     # Apply pagination
     query = query.offset(offset).limit(limit)
@@ -507,6 +552,8 @@ def create_reply(post_id: int, reply: Post, session: Session = Depends(get_sessi
 
     reply.parent_id = post_id
     reply.platform = "x"  # enforce
+    reply.posted_at_utc = _normalize_utc_timestamp(reply.posted_at_utc)
+    _validate_reply_timing(reply.posted_at, reply.posted_at_utc, parent)
     session.add(reply)
     session.commit()
     session.refresh(reply)
@@ -576,6 +623,17 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
     post = session.get(Post, post_id)
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    if "posted_at_utc" in updates:
+        updates["posted_at_utc"] = _normalize_utc_timestamp(updates["posted_at_utc"])
+
+    if post.parent_id is not None:
+        parent = session.get(Post, post.parent_id)
+        _validate_reply_timing(
+            updates.get("posted_at", post.posted_at),
+            updates.get("posted_at_utc", post.posted_at_utc),
+            parent,
+        )
 
     next_posted_at = updates.get("posted_at")
     if post.parent_id is None and next_posted_at is not None and next_posted_at != post.posted_at:

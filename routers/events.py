@@ -245,15 +245,21 @@ def list_categories():
 
 @router.get("/tag-index")
 def get_event_tag_index(session: Session = Depends(get_session)):
-    """Return only the event fields needed to link timeline hashtags."""
+    """Return event tags and project hashtags used by timeline post links."""
     events = session.exec(
         select(Event)
         .where(Event.is_visible == True)
         .order_by(Event.start_date, Event.id)
     ).all()
-    return [
+    projects = session.exec(
+        select(Project)
+        .where(Project.is_visible == True, Project.hashtag != None)
+        .order_by(Project.start_date, Project.id)
+    ).all()
+    event_entries = [
         {
             "id": event.id,
+            "name": event.name,
             "tags": _safe_parse_tags(event.tags_json),
             "category": event.category,
             "subcategory": event.subcategory,
@@ -263,6 +269,22 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         }
         for event in events
     ]
+    project_entries = [
+        {
+            "id": f"project-{project.id}",
+            "name": project.title,
+            "tags": [project.hashtag],
+            "category": "project",
+            "subcategory": None,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
+            "project_id": project.id,
+            "is_project": True,
+        }
+        for project in projects
+        if project.hashtag and project.hashtag.strip()
+    ]
+    return event_entries + project_entries
 
 
 @router.get("/admin", dependencies=[Depends(require_admin)])

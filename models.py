@@ -78,8 +78,13 @@ class Post(SQLModel, table=True):
     caption: Optional[str] = None
     caption_translation: Optional[str] = None
     caption_translation_note: Optional[str] = None   # optional translator's note
+    show_translation_note: bool = Field(default=True)
+    timeline_context: Optional[str] = None  # curator-authored context, not the author's caption
+    show_timeline_context: bool = Field(default=True)
 
     posted_at: Optional[str] = None
+    posted_at_utc: Optional[str] = None  # exact ISO-8601 instant, normalized to UTC
+    posted_at_is_estimated: bool = Field(default=False)
     sort_order: int = Field(default=0, index=True)
     media_url: Optional[str] = None
 

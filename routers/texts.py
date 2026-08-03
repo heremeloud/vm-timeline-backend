@@ -24,6 +24,8 @@ def add_text(text: PostText, session: Session = Depends(get_session)):
     if text.type.startswith("tt-") and post.platform != "tt":
         raise HTTPException(
             status_code=400, detail="tt-* text must belong to a TikTok post")
+    if text.posted_at and post.posted_at and text.posted_at < post.posted_at:
+        raise HTTPException(status_code=422, detail="A reply cannot be dated before its parent post")
 
     session.add(text)
     session.commit()
@@ -104,6 +106,9 @@ def edit_pair(text_id: int, payload: dict, session: Session = Depends(get_sessio
     if "author_id" in payload:
         parent.author_id = payload["author_id"]
     if "posted_at" in payload:
+        post = session.get(Post, parent.post_id)
+        if payload["posted_at"] and post and post.posted_at and payload["posted_at"] < post.posted_at:
+            raise HTTPException(status_code=422, detail="A reply cannot be dated before its parent post")
         parent.posted_at = payload["posted_at"] or None
 
     session.commit()

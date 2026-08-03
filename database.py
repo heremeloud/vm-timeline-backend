@@ -58,6 +58,34 @@ def run_migrations():
             conn.commit()
             print("Migration: added caption_translation_note to post")
 
+        if "show_translation_note" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN show_translation_note BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE post SET show_translation_note = 1 WHERE show_translation_note IS NULL"))
+            conn.commit()
+            print("Migration: added show_translation_note to post")
+
+        if "timeline_context" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN timeline_context VARCHAR"))
+            conn.commit()
+            print("Migration: added timeline_context to post")
+
+        if "show_timeline_context" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN show_timeline_context BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE post SET show_timeline_context = 1 WHERE show_timeline_context IS NULL"))
+            conn.commit()
+            print("Migration: added show_timeline_context to post")
+
+        if "posted_at_utc" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN posted_at_utc VARCHAR"))
+            conn.commit()
+            print("Migration: added posted_at_utc to post")
+
+        if "posted_at_is_estimated" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN posted_at_is_estimated BOOLEAN DEFAULT 0"))
+            conn.execute(text("UPDATE post SET posted_at_is_estimated = 0 WHERE posted_at_is_estimated IS NULL"))
+            conn.commit()
+            print("Migration: added posted_at_is_estimated to post")
+
         if "is_visible" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
             conn.execute(text("UPDATE post SET is_visible = 1 WHERE is_visible IS NULL"))
