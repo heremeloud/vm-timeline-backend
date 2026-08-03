@@ -2,7 +2,8 @@ import json
 from collections import defaultdict
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
+from sqlalchemy.orm import aliased
 from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
 from models import Post, PostText, Author
@@ -51,20 +52,30 @@ def _filter_post_platform(query, platform: str | None):
 
 
 def _order_posts(query, sort: str = "newest"):
-    """Use exact time when known; retain manual ordering as the date-only fallback."""
-    # A date-only record is treated as Bangkok midnight for its chronological
-    # position. Its existing sort_order remains the tie-breaker.
-    fallback_utc = func.strftime("%Y-%m-%dT%H:%M:%fZ", Post.posted_at, "-7 hours")
-    chronological_time = func.coalesce(Post.posted_at_utc, fallback_utc)
+    """Sort exact-only dates chronologically and mixed/date-only dates manually."""
+    same_date_post = aliased(Post)
+    date_has_date_only_post = (
+        select(same_date_post.id)
+        .where(
+            same_date_post.parent_id == None,
+            same_date_post.posted_at == Post.posted_at,
+            same_date_post.posted_at_utc == None,
+        )
+        .exists()
+    )
+    manual_order = case((date_has_date_only_post, Post.sort_order), else_=0)
+    exact_order = case((date_has_date_only_post, None), else_=Post.posted_at_utc)
     if sort == "newest":
         return query.order_by(
-            desc(chronological_time),
-            Post.sort_order,
+            desc(Post.posted_at),
+            manual_order,
+            desc(exact_order),
             desc(Post.id),
         )
     return query.order_by(
-        chronological_time,
-        desc(Post.sort_order),
+        Post.posted_at,
+        desc(manual_order),
+        exact_order,
         Post.id,
     )
 

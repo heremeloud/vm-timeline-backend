@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import jwt, JWTError
+from jose.exceptions import ExpiredSignatureError
 import bcrypt
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -93,10 +94,19 @@ def require_admin(token: str = Depends(oauth2_scheme)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized"
             )
+    except ExpiredSignatureError as e:
+        print("JWT decode error:", repr(e))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except JWTError as e:
         print("JWT decode error:", repr(e))
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid token"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return True
