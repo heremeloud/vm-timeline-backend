@@ -9,12 +9,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database import create_db_and_tables, run_migrations
+from middleware.rate_limit import RateLimiter
 
 # Routers
 from routers import posts, texts, authors, events, projects, topics, media
 
 
 app = FastAPI(title="VM Social Timeline API")
+
+
+rate_limiter = RateLimiter()
+
+
+@app.middleware("http")
+async def rate_limit_requests(request, call_next):
+    return await rate_limiter(request, call_next)
 
 
 # ---------------------------------------------------------
