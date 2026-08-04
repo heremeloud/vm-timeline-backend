@@ -5,7 +5,8 @@ from urllib.parse import quote, unquote, urlsplit
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from middleware.auth import require_admin
@@ -121,6 +122,44 @@ def _resolve_public_object(url: str) -> tuple[str, str, str]:
         return destination, bucket, object_key
 
     raise HTTPException(status_code=400, detail="This URL does not match a configured R2 destination")
+
+
+@router.get("/download")
+def download_media(url: str = Query(...)):
+    _, bucket, object_key = _resolve_public_object(url)
+
+    try:
+        obj = _r2_client().get_object(Bucket=bucket, Key=object_key)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+            raise HTTPException(status_code=404, detail="The R2 object was not found") from exc
+        raise HTTPException(status_code=502, detail="R2 download failed") from exc
+    except BotoCoreError as exc:
+        raise HTTPException(status_code=502, detail="R2 download failed") from exc
+
+    body = obj["Body"]
+    filename = Path(object_key).name
+
+    def stream_file():
+        try:
+            for chunk in body.iter_chunks(chunk_size=1024 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            body.close()
+
+    headers = {
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Cache-Control": "private, max-age=0",
+    }
+    if obj.get("ContentLength") is not None:
+        headers["Content-Length"] = str(obj["ContentLength"])
+
+    return StreamingResponse(
+        stream_file(),
+        media_type=obj.get("ContentType") or "application/octet-stream",
+        headers=headers,
+    )
 
 
 @router.post("/upload", dependencies=[Depends(require_admin)])
