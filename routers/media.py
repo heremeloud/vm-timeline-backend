@@ -124,9 +124,44 @@ def _resolve_public_object(url: str) -> tuple[str, str, str]:
     raise HTTPException(status_code=400, detail="This URL does not match a configured R2 destination")
 
 
+def _resolve_download_object(url: str) -> tuple[str, str, str]:
+    try:
+        return _resolve_public_object(url)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+
+    # Existing database rows may retain an older public r2.dev hostname after
+    # a bucket is moved to a custom domain. Resolve those URLs by object key,
+    # but only against buckets already configured for this application.
+    target = urlsplit(url.strip())
+    if target.scheme != "https" or not target.netloc.lower().endswith(".r2.dev"):
+        raise HTTPException(status_code=400, detail="This URL does not match a configured R2 destination")
+
+    object_key = unquote(target.path.lstrip("/"))
+    if not object_key or any(part in {"", ".", ".."} for part in object_key.split("/")):
+        raise HTTPException(status_code=400, detail="The media URL does not contain a valid R2 object key")
+
+    client = _r2_client()
+    for destination, config in _destinations().items():
+        bucket = (config.get("bucket") or "").strip()
+        if not bucket:
+            continue
+        try:
+            client.head_object(Bucket=bucket, Key=object_key)
+            return destination, bucket, object_key
+        except ClientError as lookup_exc:
+            if lookup_exc.response.get("Error", {}).get("Code") not in {"404", "NoSuchKey", "NotFound"}:
+                raise HTTPException(status_code=502, detail="R2 download lookup failed") from lookup_exc
+        except BotoCoreError as lookup_exc:
+            raise HTTPException(status_code=502, detail="R2 download lookup failed") from lookup_exc
+
+    raise HTTPException(status_code=404, detail="The R2 object was not found in a configured bucket")
+
+
 @router.get("/download")
 def download_media(url: str = Query(...)):
-    _, bucket, object_key = _resolve_public_object(url)
+    _, bucket, object_key = _resolve_download_object(url)
 
     try:
         obj = _r2_client().get_object(Bucket=bucket, Key=object_key)
