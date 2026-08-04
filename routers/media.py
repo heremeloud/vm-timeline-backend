@@ -56,7 +56,14 @@ def _slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")[:60]
 
 
-def _object_key(author: str, posted_at: str, media_type: str, sequence: int, filename: str | None) -> str:
+def _object_key(
+    author: str,
+    posted_at: str,
+    media_type: str,
+    sequence: int,
+    filename: str | None,
+    custom_filename: str | None = None,
+) -> str:
     author_slug = _slug(author)
     if not author_slug:
         raise HTTPException(status_code=400, detail="A valid author is required")
@@ -75,6 +82,15 @@ def _object_key(author: str, posted_at: str, media_type: str, sequence: int, fil
     extension = re.sub(r"[^a-zA-Z0-9.]", "", Path(filename or "").suffix.lower())[:10]
     if not extension:
         raise HTTPException(status_code=400, detail="The uploaded file needs a file extension")
+
+    if custom_filename and custom_filename.strip():
+        requested_name = Path(custom_filename.strip()).name
+        requested_extension = re.sub(r"[^a-zA-Z0-9.]", "", Path(requested_name).suffix.lower())[:10]
+        requested_stem = Path(requested_name).stem if requested_extension else requested_name
+        safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "-", requested_stem).strip("._-")[:120]
+        if not safe_stem:
+            raise HTTPException(status_code=400, detail="The custom filename needs letters or numbers")
+        return f"{year}{month}/{safe_stem}{requested_extension or extension}"
 
     date_digits = f"{year}{month}{day}"
     generated_name = f"{author_slug}-{date_digits}-{type_slug}-{sequence:02d}{extension}"
@@ -204,6 +220,7 @@ def upload_media(
     posted_at: str = Form(...),
     media_type: str = Form(...),
     sequence: int = Form(...),
+    filename: str | None = Form(None),
     file: UploadFile = File(...),
 ):
     config = _destinations().get(destination)
@@ -230,7 +247,7 @@ def upload_media(
         max_mb = max_bytes // (1024 * 1024)
         raise HTTPException(status_code=413, detail=f"File exceeds the {max_mb} MB upload limit")
 
-    object_key = _object_key(author, posted_at, media_type, sequence, file.filename)
+    object_key = _object_key(author, posted_at, media_type, sequence, file.filename, filename)
     client = _r2_client()
 
     try:
@@ -271,11 +288,11 @@ def delete_media_object(payload: MediaDeleteRequest):
     client = _r2_client()
 
     try:
-        client.head_object(Bucket=bucket, Key=object_key)
+        # R2/S3 deletion is idempotent: deleting an object that is already
+        # absent still leaves us in the requested state. Avoid a separate
+        # existence check so stale local URLs can be removed cleanly.
         client.delete_object(Bucket=bucket, Key=object_key)
     except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
-            raise HTTPException(status_code=404, detail="The R2 object was not found") from exc
         raise HTTPException(status_code=502, detail="R2 deletion failed") from exc
     except BotoCoreError as exc:
         raise HTTPException(status_code=502, detail="R2 deletion failed") from exc

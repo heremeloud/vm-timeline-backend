@@ -5,7 +5,7 @@ from typing import Optional, List, Any, Dict
 import json
 
 from database import get_session
-from models import Event, Author, EventAuthorLink, Project
+from models import Event, Author, EventAuthorLink, Project, ProjectEpisode
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 
@@ -245,7 +245,7 @@ def list_categories():
 
 @router.get("/tag-index")
 def get_event_tag_index(session: Session = Depends(get_session)):
-    """Return event tags and project hashtags used by timeline post links."""
+    """Return event tags plus project and episode hashtags used by timeline post links."""
     events = session.exec(
         select(Event)
         .where(Event.is_visible == True)
@@ -253,9 +253,19 @@ def get_event_tag_index(session: Session = Depends(get_session)):
     ).all()
     projects = session.exec(
         select(Project)
-        .where(Project.is_visible == True, Project.hashtag != None)
+        .where(Project.is_visible == True)
         .order_by(Project.start_date, Project.id)
     ).all()
+    visible_project_ids = [project.id for project in projects]
+    episodes = session.exec(
+        select(ProjectEpisode)
+        .where(
+            ProjectEpisode.project_id.in_(visible_project_ids),
+            ProjectEpisode.hashtag != None,
+        )
+        .order_by(ProjectEpisode.project_id, ProjectEpisode.episode_number, ProjectEpisode.id)
+    ).all() if visible_project_ids else []
+    projects_by_id = {project.id: project for project in projects}
     event_entries = [
         {
             "id": event.id,
@@ -284,7 +294,24 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         for project in projects
         if project.hashtag and project.hashtag.strip()
     ]
-    return event_entries + project_entries
+    episode_entries = [
+        {
+            "id": f"project-{episode.project_id}-episode-{episode.id}",
+            "name": f"{projects_by_id[episode.project_id].title} EP{episode.episode_number}",
+            "tags": [episode.hashtag],
+            "category": "project episode",
+            "subcategory": None,
+            "start_date": episode.air_date or projects_by_id[episode.project_id].start_date,
+            "end_date": episode.air_date or projects_by_id[episode.project_id].end_date,
+            "project_id": episode.project_id,
+            "episode_number": episode.episode_number,
+            "is_project": True,
+            "is_episode": True,
+        }
+        for episode in episodes
+        if episode.hashtag and episode.hashtag.strip()
+    ]
+    return event_entries + project_entries + episode_entries
 
 
 @router.get("/admin", dependencies=[Depends(require_admin)])
