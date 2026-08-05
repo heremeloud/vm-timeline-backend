@@ -6,6 +6,8 @@ from threading import Lock
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from middleware.auth import is_admin_token
+
 
 def _positive_int(name: str, default: int) -> int:
     try:
@@ -52,7 +54,22 @@ class RateLimiter:
 
         return "api", self.api_limit, 60
 
+    @staticmethod
+    def _is_admin(request: Request) -> bool:
+        authorization = request.headers.get("authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        return (
+            scheme.lower() == "bearer"
+            and bool(token)
+            and is_admin_token(token.strip())
+        )
+
     async def __call__(self, request: Request, call_next):
+        # Admin screens can make many parallel API requests. A valid admin JWT
+        # bypasses the public, IP-based limiter; forged or expired tokens do not.
+        if self._is_admin(request):
+            return await call_next(request)
+
         rule = self._rule(request)
         if rule is None:
             return await call_next(request)
