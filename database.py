@@ -48,6 +48,24 @@ def run_migrations():
             conn.commit()
             print("Migration: added content_type to post")
 
+        if "temp_author_name" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN temp_author_name VARCHAR"))
+            conn.commit()
+            print("Migration: added temp_author_name to post")
+
+        if "temp_author_pfp_url" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN temp_author_pfp_url VARCHAR"))
+            conn.commit()
+            print("Migration: added temp_author_pfp_url to post")
+
+        normalized_temp_authors = conn.execute(text(
+            "UPDATE post SET author_id = NULL "
+            "WHERE trim(coalesce(temp_author_name, '')) != '' AND author_id IS NOT NULL"
+        ))
+        if normalized_temp_authors.rowcount:
+            conn.commit()
+            print(f"Migration: detached {normalized_temp_authors.rowcount} temporary post author(s)")
+
         if "media_urls_json" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN media_urls_json VARCHAR DEFAULT '[]'"))
             conn.commit()
@@ -219,6 +237,11 @@ def run_migrations():
                 )
             conn.commit()
             print("Migration: added announcement_urls_json to event")
+
+        if "live_media_items_json" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN live_media_items_json VARCHAR DEFAULT '[]'"))
+            conn.commit()
+            print("Migration: added live_media_items_json to event")
 
         if "private_notes" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN private_notes VARCHAR"))

@@ -12,6 +12,46 @@ from middleware.auth import require_admin
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
 
+def _has_public_author():
+    """A post is attributable through a visible saved author or a local author."""
+    return or_(
+        Author.show_on_timeline == True,
+        func.trim(func.coalesce(Post.temp_author_name, "")) != "",
+    )
+
+
+def _normalize_post_author(post: Post) -> None:
+    """Keep saved-author and post-local-author storage mutually exclusive."""
+    post.temp_author_name = (post.temp_author_name or "").strip() or None
+    post.temp_author_pfp_url = (
+        (post.temp_author_pfp_url or "").strip() or None
+        if post.temp_author_name
+        else None
+    )
+    if post.temp_author_name:
+        post.author_id = None
+    elif post.author_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Select an author or provide temp_author_name",
+        )
+
+
+def _filter_admin_author(query, author_filter: str | None):
+    if author_filter is None or author_filter == "all":
+        return query
+    if author_filter == "temp":
+        return query.where(
+            Post.author_id == None,
+            func.trim(func.coalesce(Post.temp_author_name, "")) != "",
+        )
+    try:
+        saved_author_id = int(author_filter)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid author filter") from exc
+    return query.where(Post.author_id == saved_author_id)
+
+
 def _normalize_utc_timestamp(value: str | None) -> str | None:
     if not value:
         return None
@@ -91,13 +131,16 @@ def _order_replies(query):
 def _enrich(p: Post, author: Author | None) -> dict:
     """Return a post dict with author info and parsed media_urls list."""
     obj = p.dict()
-    obj["author_name"] = author.name if author else None
-    obj["author_photo"] = (author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url) if author else None
-    obj["author_ig_pfp_url"] = author.ig_pfp_url if author else None
-    obj["author_twitter_pfp_url"] = author.twitter_pfp_url if author else None
-    obj["author_tiktok_pfp_url"] = author.tiktok_pfp_url if author else None
-    obj["author_instagram_url"] = author.instagram_url if author else None
-    obj["author_broadcast_channel_name"] = author.broadcast_channel_name if author else None
+    fallback_photo = (author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url) if author else None
+    temp_photo = p.temp_author_pfp_url if p.temp_author_name else None
+    display_photo = temp_photo or fallback_photo
+    obj["author_name"] = p.temp_author_name or (author.name if author else None)
+    obj["author_photo"] = display_photo
+    obj["author_ig_pfp_url"] = temp_photo or (author.ig_pfp_url if author else None)
+    obj["author_twitter_pfp_url"] = temp_photo or (author.twitter_pfp_url if author else None)
+    obj["author_tiktok_pfp_url"] = temp_photo or (author.tiktok_pfp_url if author else None)
+    obj["author_instagram_url"] = None if p.temp_author_name else (author.instagram_url if author else None)
+    obj["author_broadcast_channel_name"] = None if p.temp_author_name else (author.broadcast_channel_name if author else None)
     # Parse stored JSON array; fall back to [] on bad data
     try:
         raw = json.loads(p.media_urls_json or "[]")
@@ -128,7 +171,7 @@ def _enrich_text(text: PostText, author: Author | None) -> dict:
 @router.get("/admin")
 def get_admin_posts(
     platform: str | None = None,
-    author_id: int | None = None,
+    author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str = "newest",
@@ -140,8 +183,7 @@ def get_admin_posts(
     query = select(Post).where(Post.parent_id == None)
 
     query = _filter_post_platform(query, platform)
-    if author_id is not None:
-        query = query.where(Post.author_id == author_id)
+    query = _filter_admin_author(query, author_id)
     if date_from:
         query = query.where(Post.posted_at >= date_from.strip())
     if date_to:
@@ -164,7 +206,7 @@ def search_admin_posts(
     q: str,
     sort: str = "newest",
     platform: str | None = None,
-    author_id: int | None = None,
+    author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     include_text: bool = True,
@@ -186,6 +228,7 @@ def search_admin_posts(
     post_conditions = []
     if include_text:
         post_conditions.append(Post.caption.ilike(pattern))
+        post_conditions.append(Post.temp_author_name.ilike(pattern))
     if include_translations:
         post_conditions.append(Post.caption_translation.ilike(pattern))
     if include_notes:
@@ -218,9 +261,9 @@ def search_admin_posts(
             text_query = _filter_post_platform(text_query, platform)
 
     if author_id is not None:
-        post_query = post_query.where(Post.author_id == author_id)
+        post_query = _filter_admin_author(post_query, author_id)
         if text_query is not None:
-            text_query = text_query.where(Post.author_id == author_id)
+            text_query = _filter_admin_author(text_query, author_id)
 
     if date_from:
         start = date_from.strip()
@@ -247,6 +290,7 @@ def search_admin_posts(
         selected_match_fields = []
         if include_text:
             selected_match_fields.append(post.caption)
+            selected_match_fields.append(post.temp_author_name)
         if include_translations:
             selected_match_fields.append(post.caption_translation)
         if include_notes:
@@ -371,11 +415,11 @@ def get_timeline(
     """Return one fully-hydrated timeline page without per-post API calls."""
     query = (
         select(Post)
-        .join(Author)
+        .outerjoin(Author)
         .where(
             Post.parent_id == None,
             Post.is_visible == True,
-            Author.show_on_timeline == True,
+            _has_public_author(),
         )
     )
     query = _filter_post_platform(query, platform)
@@ -396,11 +440,11 @@ def get_timeline(
         ).all()
         reply_query = (
             select(Post)
-            .join(Author)
+            .outerjoin(Author)
             .where(
                 Post.parent_id.in_(post_ids),
                 Post.is_visible == True,
-                Author.show_on_timeline == True,
+                _has_public_author(),
             )
         )
         replies = session.exec(_order_replies(reply_query)).all()
@@ -438,11 +482,11 @@ def get_timeline(
 
     newest_query = (
         select(Post)
-        .join(Author)
+        .outerjoin(Author)
         .where(
             Post.parent_id == None,
             Post.is_visible == True,
-            Author.show_on_timeline == True,
+            _has_public_author(),
         )
     )
     newest = session.exec(_order_posts(newest_query, "newest").limit(1)).first()
@@ -461,7 +505,8 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Post not found")
 
     author = session.get(Author, post.author_id) if post.author_id else None
-    if not post.is_visible or not author or not author.show_on_timeline:
+    has_temp_author = bool((post.temp_author_name or "").strip())
+    if not post.is_visible or not (has_temp_author or (author and author.show_on_timeline)):
         raise HTTPException(status_code=404, detail="Post not found")
 
     return {"post": _enrich(post, author)}
@@ -473,6 +518,7 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
+    _normalize_post_author(post)
     post.posted_at_utc = _normalize_utc_timestamp(post.posted_at_utc)
     if post.parent_id is not None:
         parent = session.get(Post, post.parent_id)
@@ -506,11 +552,11 @@ def get_posts(
 ):
     query = (
         select(Post)
-        .join(Author)
+        .outerjoin(Author)
         .where(
             Post.parent_id == None,
             Post.is_visible == True,
-            Author.show_on_timeline == True,
+            _has_public_author(),
         )
     )
 
@@ -563,6 +609,7 @@ def create_reply(post_id: int, reply: Post, session: Session = Depends(get_sessi
 
     reply.parent_id = post_id
     reply.platform = "x"  # enforce
+    _normalize_post_author(reply)
     reply.posted_at_utc = _normalize_utc_timestamp(reply.posted_at_utc)
     _validate_reply_timing(reply.posted_at, reply.posted_at_utc, parent)
     session.add(reply)
@@ -579,11 +626,11 @@ def create_reply(post_id: int, reply: Post, session: Session = Depends(get_sessi
 def get_thread(post_id: int, session: Session = Depends(get_session)):
     replies = session.exec(
         select(Post)
-        .join(Author)
+        .outerjoin(Author)
         .where(
             Post.parent_id == post_id,
             Post.is_visible == True,
-            Author.show_on_timeline == True,
+            _has_public_author(),
         )
     ).all()
 
@@ -660,6 +707,8 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
     for key, value in updates.items():
         if hasattr(post, key):
             setattr(post, key, value)
+
+    _normalize_post_author(post)
 
     session.add(post)
     session.commit()

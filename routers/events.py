@@ -53,6 +53,33 @@ def _safe_dump_urls(urls: Optional[List[str]]) -> str:
     return json.dumps(list(dict.fromkeys(clean)), ensure_ascii=False)
 
 
+def _clean_live_media_items(items) -> List[Dict[str, Optional[str]]]:
+    clean = []
+    for item in items or []:
+        raw = item.model_dump() if hasattr(item, "model_dump") else dict(item)
+        url = str(raw.get("url") or "").strip()
+        if not url:
+            continue
+        hashtag = str(raw.get("hashtag") or "").strip().lstrip("#") or None
+        keyword = str(raw.get("keyword") or "").strip() or None
+        clean.append({"url": url, "keyword": keyword, "hashtag": hashtag})
+    return clean
+
+
+def _parse_live_media_items(ev: Event) -> List[Dict[str, Optional[str]]]:
+    try:
+        parsed = _clean_live_media_items(json.loads(ev.live_media_items_json or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        parsed = []
+    if parsed:
+        return parsed
+    return [
+        {"url": url.strip(), "keyword": None, "hashtag": None}
+        for url in (ev.live_urls or "").split(",")
+        if url.strip()
+    ]
+
+
 def _serialize_event(session: Session, ev: Event, include_private: bool = False) -> Dict[str, Any]:
     # Load participants via link table
     links = session.exec(
@@ -78,8 +105,10 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
     obj["tags"] = _safe_parse_tags(getattr(ev, "tags_json", "[]"))
 
     # ensure live_urls comes back as list
-    raw = getattr(ev, "live_urls", "") or ""
-    obj["live_urls"] = [u.strip() for u in raw.split(",") if u.strip()]
+    live_media_items = _parse_live_media_items(ev)
+    obj["live_media_items"] = live_media_items
+    obj["live_urls"] = [item["url"] for item in live_media_items]
+    obj.pop("live_media_items_json", None)
 
     # Private reference fields are only returned from authenticated admin routes.
     obj.pop("announcement_url", None)
@@ -189,6 +218,12 @@ def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
     return field_name in fields_set
 
 
+class LiveMediaItem(BaseModel):
+    url: str
+    keyword: Optional[str] = None
+    hashtag: Optional[str] = None
+
+
 class EventCreate(BaseModel):
     name: str
     english_name: Optional[str] = None
@@ -206,6 +241,7 @@ class EventCreate(BaseModel):
     announcement_urls: Optional[List[str]] = None
     private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
+    live_media_items: Optional[List[LiveMediaItem]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
     parent_event_id: Optional[int] = None
@@ -229,6 +265,7 @@ class EventUpdate(BaseModel):
     announcement_urls: Optional[List[str]] = None
     private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
+    live_media_items: Optional[List[LiveMediaItem]] = None
     author_ids: Optional[List[int]] = None
     project_id: Optional[int] = None
     parent_event_id: Optional[int] = None
@@ -474,6 +511,11 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
 
     start_date = (payload.start_date or payload.event_date or "").strip() or None
     end_date = (payload.end_date or "").strip() or None
+    live_media_items = _clean_live_media_items(payload.live_media_items)
+    if not live_media_items:
+        live_media_items = _clean_live_media_items(
+            {"url": url} for url in (payload.live_urls or [])
+        )
 
     ev = Event(
         name=name,
@@ -492,7 +534,8 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         announcement_url=None,
         announcement_urls_json=_safe_dump_urls(payload.announcement_urls),
         private_notes=(payload.private_notes.strip() if payload.private_notes else None),
-        live_urls=",".join(u.strip() for u in (payload.live_urls or []) if u.strip()),
+        live_urls=",".join(item["url"] for item in live_media_items),
+        live_media_items_json=json.dumps(live_media_items, ensure_ascii=False),
         project_id=payload.project_id,
         parent_event_id=payload.parent_event_id,
         is_visible=payload.is_visible,
@@ -578,8 +621,14 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if _field_was_sent(payload, "private_notes"):
         ev.private_notes = payload.private_notes.strip() if payload.private_notes else None
 
-    if payload.live_urls is not None:
-        ev.live_urls = ",".join(u.strip() for u in payload.live_urls if u.strip())
+    if _field_was_sent(payload, "live_media_items"):
+        live_media_items = _clean_live_media_items(payload.live_media_items)
+        ev.live_media_items_json = json.dumps(live_media_items, ensure_ascii=False)
+        ev.live_urls = ",".join(item["url"] for item in live_media_items)
+    elif payload.live_urls is not None:
+        live_media_items = _clean_live_media_items({"url": url} for url in payload.live_urls)
+        ev.live_media_items_json = json.dumps(live_media_items, ensure_ascii=False)
+        ev.live_urls = ",".join(item["url"] for item in live_media_items)
 
     if payload.project_id is not None:
         ev.project_id = payload.project_id

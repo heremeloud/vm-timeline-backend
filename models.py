@@ -74,6 +74,8 @@ class Post(SQLModel, table=True):
     external_id: str
 
     author_id: Optional[int] = Field(default=None, foreign_key="author.id")
+    temp_author_name: Optional[str] = None
+    temp_author_pfp_url: Optional[str] = None
 
     caption: Optional[str] = None
     caption_translation: Optional[str] = None
@@ -318,6 +320,7 @@ class Event(SQLModel, table=True):
     announcement_urls_json: str = Field(default="[]")
     private_notes: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls
+    live_media_items_json: str = Field(default="[]")
 
     project_id: Optional[int] = Field(default=None, foreign_key="project.id")
     parent_event_id: Optional[int] = Field(default=None, foreign_key="event.id")
