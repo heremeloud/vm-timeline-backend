@@ -4,6 +4,7 @@
 Run from vm-timeline-backend:
     python3 scripts/refresh_instagram_pfps.py --dry-run
     python3 scripts/refresh_instagram_pfps.py
+    python3 scripts/refresh_instagram_pfps.py --redownload-all
 """
 
 from __future__ import annotations
@@ -14,12 +15,15 @@ import json
 import os
 import re
 import sqlite3
+import ssl
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+import certifi
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = SCRIPT_DIR.parent
@@ -30,6 +34,7 @@ DB_PATH = BACKEND_DIR / "vm-social.db"
 UPLOAD_DIR = BACKEND_DIR / "uploads" / "authors"
 PUBLIC_PREFIX = "/static/authors"
 DEFAULT_TIMEOUT = 20
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 HEADERS = {
     "User-Agent": (
@@ -67,7 +72,7 @@ class AuthorRow:
 
 def request_bytes(url: str, headers: dict[str, str], timeout: int) -> tuple[bytes, str]:
     req = Request(url, headers=headers)
-    with urlopen(req, timeout=timeout) as response:
+    with urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
         content_type = response.headers.get("Content-Type", "")
         return response.read(), content_type
 
@@ -242,7 +247,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Download current Instagram profile photos and save stable local author URLs."
     )
     parser.add_argument("--dry-run", action="store_true", help="Fetch profile pages but do not download images or update the DB.")
-    parser.add_argument("--force", action="store_true", help="Refresh even when ig_pfp_url already points to a local /static/authors file.")
+    parser.add_argument(
+        "--force",
+        "--redownload-all",
+        dest="force",
+        action="store_true",
+        help="Redownload every matching Instagram PFP, including authors that already have a local image.",
+    )
     parser.add_argument("--author-id", type=int, help="Refresh one author by ID.")
     parser.add_argument("--name", help="Refresh authors whose name contains this text.")
     parser.add_argument("--limit", type=positive_int, help="Stop after checking this many matching authors.")
@@ -250,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def limited(rows: Iterable[Author], limit: int | None) -> Iterable[Author]:
+def limited(rows: Iterable[AuthorRow], limit: int | None) -> Iterable[AuthorRow]:
     if limit is None:
         yield from rows
         return
