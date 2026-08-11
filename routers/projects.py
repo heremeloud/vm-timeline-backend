@@ -2,7 +2,7 @@ import json
 import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
-from sqlalchemy import case, nullslast, nullsfirst
+from sqlalchemy import case, func, nullslast, nullsfirst
 from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
@@ -137,6 +137,71 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     obj["filming_days"] = [row.dict() for row in filming_days]
     obj["episode_metadata"] = [row.dict() for row in episodes]
     return obj
+
+
+def _serialize_project_list(session: Session, projects: List[Project]) -> List[Dict[str, Any]]:
+    """Return project-card data without loading detail-only collections."""
+    project_ids = [project.id for project in projects if project.id is not None]
+    if not project_ids:
+        return []
+
+    links = session.exec(
+        select(ProjectAuthorLink).where(ProjectAuthorLink.project_id.in_(project_ids))
+    ).all()
+    author_ids = {link.author_id for link in links if link.author_id is not None}
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+    authors_by_project = {project_id: [] for project_id in project_ids}
+    for link in links:
+        author = authors_by_id.get(link.author_id)
+        if author:
+            authors_by_project.setdefault(link.project_id, []).append(author)
+
+    parent_ids = {project.parent_project_id for project in projects if project.parent_project_id is not None}
+    parents = session.exec(select(Project).where(Project.id.in_(parent_ids))).all() if parent_ids else []
+    parents_by_id = {parent.id: parent for parent in parents}
+
+    serialized = []
+    for project in projects:
+        obj = {
+            "id": project.id,
+            "title": project.title,
+            "original_title": project.original_title,
+            "hashtag": project.hashtag,
+            "slug": project.slug,
+            "category": project.category,
+            "thumbnail_url": project.thumbnail_url,
+            "thumbnail_focal_x": project.thumbnail_focal_x,
+            "thumbnail_focal_y": project.thumbnail_focal_y,
+            "is_visible": project.is_visible,
+            "year": project.year,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
+            "parent_project_id": project.parent_project_id,
+        }
+        obj["authors"] = [
+            {
+                "id": author.id,
+                "name": author.name,
+                "profile_photo_url": author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url,
+                "ig_pfp_url": author.ig_pfp_url,
+                "twitter_pfp_url": author.twitter_pfp_url,
+                "tiktok_pfp_url": author.tiktok_pfp_url,
+            }
+            for author in authors_by_project.get(project.id, [])
+        ]
+        parent = parents_by_id.get(project.parent_project_id)
+        obj["parent_project"] = {
+            "id": parent.id,
+            "title": parent.title,
+            "slug": parent.slug,
+            "thumbnail_url": parent.thumbnail_url,
+            "thumbnail_focal_x": parent.thumbnail_focal_x,
+            "thumbnail_focal_y": parent.thumbnail_focal_y,
+            "category": parent.category,
+        } if parent else None
+        serialized.append(obj)
+    return serialized
 
 
 def _ensure_authors(session: Session, author_ids: List[int]) -> List[Author]:
@@ -320,7 +385,18 @@ def list_admin_projects(
         query = query.order_by(nullsfirst(Project.start_date.desc()), Project.id.desc())
 
     projects = session.exec(query.offset(offset).limit(limit)).all()
-    return [_serialize_project(session, p) for p in projects]
+    return _serialize_project_list(session, projects)
+
+
+@router.get("/admin/count", dependencies=[Depends(require_admin)])
+def count_admin_projects(
+    category: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    query = select(func.count(Project.id))
+    if category:
+        query = query.where(Project.category == category.strip().lower())
+    return {"count": session.exec(query).one()}
 
 
 @router.get("/admin/{project_ref}", dependencies=[Depends(require_admin)])
@@ -352,7 +428,7 @@ def list_projects(
         query = query.order_by(nullsfirst(Project.start_date.desc()), Project.id.desc())
 
     projects = session.exec(query).all()
-    return [_serialize_project(session, p) for p in projects]
+    return _serialize_project_list(session, projects)
 
 
 # ----------------------------

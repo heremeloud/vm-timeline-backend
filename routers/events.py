@@ -181,6 +181,98 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
     return obj
 
 
+def _serialize_event_list(session: Session, events: List[Event], include_private: bool = False) -> List[Dict[str, Any]]:
+    """Serialize an event page with a fixed number of relation queries."""
+    event_ids = [ev.id for ev in events if ev.id is not None]
+    if not event_ids:
+        return []
+
+    links = session.exec(
+        select(EventAuthorLink).where(EventAuthorLink.event_id.in_(event_ids))
+    ).all()
+    author_ids = {link.author_id for link in links if link.author_id is not None}
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+    authors_by_event = {event_id: [] for event_id in event_ids}
+    for link in links:
+        author = authors_by_id.get(link.author_id)
+        if author:
+            authors_by_event.setdefault(link.event_id, []).append(author)
+
+    parent_ids = {ev.parent_event_id for ev in events if ev.parent_event_id is not None}
+    parents = session.exec(select(Event).where(Event.id.in_(parent_ids))).all() if parent_ids else []
+    parents_by_id = {parent.id: parent for parent in parents}
+
+    children = session.exec(
+        select(Event)
+        .where(Event.parent_event_id.in_(event_ids))
+        .order_by(Event.start_date, Event.id)
+    ).all()
+    children_by_parent = {event_id: [] for event_id in event_ids}
+    for child in children:
+        children_by_parent.setdefault(child.parent_event_id, []).append(child)
+
+    project_ids = {ev.project_id for ev in events if ev.project_id is not None}
+    projects = session.exec(select(Project).where(Project.id.in_(project_ids))).all() if project_ids else []
+    projects_by_id = {project.id: project for project in projects}
+
+    serialized = []
+    for ev in events:
+        obj = ev.dict()
+        obj["start_date"] = ev.start_date or ev.event_date
+        obj["end_date"] = ev.end_date
+        obj["tags"] = _safe_parse_tags(ev.tags_json)
+        live_media_items = _parse_live_media_items(ev)
+        obj["live_media_items"] = live_media_items
+        obj["live_urls"] = [item["url"] for item in live_media_items]
+        obj.pop("live_media_items_json", None)
+        obj.pop("announcement_url", None)
+        obj.pop("announcement_urls_json", None)
+        obj.pop("private_notes", None)
+        if include_private:
+            announcement_urls = _safe_parse_urls(ev.announcement_urls_json)
+            legacy_url = (ev.announcement_url or "").strip()
+            if legacy_url and legacy_url not in announcement_urls:
+                announcement_urls.insert(0, legacy_url)
+            obj["announcement_urls"] = announcement_urls
+            obj["private_notes"] = ev.private_notes
+
+        obj["authors"] = [
+            {
+                "id": author.id,
+                "name": author.name,
+                "profile_photo_url": author.profile_photo_url or author.ig_pfp_url or author.twitter_pfp_url,
+                "ig_pfp_url": author.ig_pfp_url,
+                "twitter_pfp_url": author.twitter_pfp_url,
+                "tiktok_pfp_url": author.tiktok_pfp_url,
+            }
+            for author in authors_by_event.get(ev.id, [])
+        ]
+        parent = parents_by_id.get(ev.parent_event_id)
+        obj["parent_event_name"] = (parent.english_name or parent.name) if parent else None
+        obj["child_events"] = [
+            {
+                "id": child.id,
+                "name": child.name,
+                "english_name": child.english_name,
+                "event_date": child.event_date,
+                "start_date": child.start_date or child.event_date,
+                "end_date": child.end_date,
+                "category": child.category,
+                "subcategory": child.subcategory,
+            }
+            for child in children_by_parent.get(ev.id, [])
+        ]
+        project = projects_by_id.get(ev.project_id)
+        obj["project_title"] = project.title if project else None
+        obj["project_thumbnail_url"] = project.thumbnail_url if project else None
+        obj["project_thumbnail_focal_x"] = project.thumbnail_focal_x if project else None
+        obj["project_thumbnail_focal_y"] = project.thumbnail_focal_y if project else None
+        obj["project_category"] = project.category if project else None
+        serialized.append(obj)
+    return serialized
+
+
 def _ensure_authors_exist(session: Session, author_ids: List[int]) -> List[Author]:
     if not author_ids:
         return []
@@ -385,7 +477,32 @@ def list_admin_events(
         query = query.order_by(desc(Event.start_date), desc(Event.id))
 
     events = session.exec(query.offset(offset).limit(limit)).all()
-    return [_serialize_event(session, ev, include_private=True) for ev in events]
+    return _serialize_event_list(session, events)
+
+
+@router.get("/admin/count", dependencies=[Depends(require_admin)])
+def count_admin_events(
+    name: Optional[str] = None,
+    category: Optional[str] = None,
+    subcategory: Optional[str] = None,
+    session: Session = Depends(get_session),
+):
+    query = select(func.count(Event.id))
+    if name:
+        raw_term = name.strip()
+        search_term = f"%{raw_term}%"
+        tag_term = f"%{raw_term.lstrip('#')}%"
+        query = query.where(or_(
+            Event.name.ilike(search_term),
+            Event.english_name.ilike(search_term),
+            Event.keyword.ilike(search_term),
+            Event.tags_json.ilike(tag_term),
+        ))
+    if category:
+        query = query.where(Event.category == category.strip().lower())
+    if subcategory:
+        query = query.where(Event.subcategory == subcategory.strip().lower())
+    return {"count": session.exec(query).one()}
 
 
 @router.get("/admin/{event_id}", dependencies=[Depends(require_admin)])
@@ -477,7 +594,7 @@ def list_events(
     query = query.offset(offset).limit(limit)
 
     events = session.exec(query).all()
-    return [_serialize_event(session, ev) for ev in events]
+    return _serialize_event_list(session, events)
 
 
 # ----------------------------

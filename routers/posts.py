@@ -192,13 +192,96 @@ def get_admin_posts(
     query = _order_posts(query, sort)
 
     posts = session.exec(query.offset(offset).limit(limit)).all()
+    author_ids = {post.author_id for post in posts if post.author_id is not None}
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+    return [_enrich(post, authors_by_id.get(post.author_id)) for post in posts]
 
-    enriched = []
-    for p in posts:
-        author = session.get(Author, p.author_id) if p.author_id else None
-        enriched.append(_enrich(p, author))
 
-    return enriched
+@router.get("/admin/count")
+def count_admin_posts(
+    platform: str | None = None,
+    author_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    query = select(func.count(Post.id)).where(Post.parent_id == None)
+    query = _filter_post_platform(query, platform)
+    query = _filter_admin_author(query, author_id)
+    if date_from:
+        query = query.where(Post.posted_at >= date_from.strip())
+    if date_to:
+        query = query.where(Post.posted_at <= date_to.strip())
+    return {"count": session.exec(query).one()}
+
+
+@router.get("/admin/search/count")
+def count_admin_post_search(
+    q: str,
+    platform: str | None = None,
+    author_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    include_text: bool = True,
+    include_translations: bool = True,
+    include_notes: bool = True,
+    include_urls: bool = True,
+    include_replies: bool = True,
+    session: Session = Depends(get_session),
+    _: bool = Depends(require_admin),
+):
+    term = q.strip()
+    if not term:
+        return {"count": 0}
+    pattern = f"%{term}%"
+
+    post_conditions = []
+    if include_text:
+        post_conditions.extend((Post.caption.ilike(pattern), Post.temp_author_name.ilike(pattern)))
+    if include_translations:
+        post_conditions.append(Post.caption_translation.ilike(pattern))
+    if include_notes:
+        post_conditions.extend((Post.caption_translation_note.ilike(pattern), Post.timeline_context.ilike(pattern)))
+    if include_urls:
+        post_conditions.extend((Post.external_url.ilike(pattern), Post.media_urls_json.ilike(pattern)))
+
+    total = 0
+    if post_conditions:
+        post_query = select(func.count(Post.id)).where(or_(*post_conditions))
+        if not include_replies:
+            post_query = post_query.where(Post.parent_id == None)
+        post_query = _filter_post_platform(post_query, platform)
+        post_query = _filter_admin_author(post_query, author_id)
+        if date_from:
+            post_query = post_query.where(Post.posted_at >= date_from.strip())
+        if date_to:
+            post_query = post_query.where(Post.posted_at <= date_to.strip())
+        total += session.exec(post_query).one()
+
+    text_conditions = []
+    if include_text:
+        text_conditions.append(PostText.content.ilike(pattern))
+    if include_translations:
+        text_conditions.append(PostText.translation.ilike(pattern))
+    if include_notes:
+        text_conditions.append(PostText.note.ilike(pattern))
+    if include_replies and text_conditions:
+        text_query = select(func.count(PostText.id)).where(or_(*text_conditions))
+        if (platform and platform != "all") or author_id is not None or date_from or date_to:
+            text_query = text_query.join(Post)
+        if platform and platform != "all":
+            text_query = _filter_post_platform(text_query, platform)
+        if author_id is not None:
+            text_query = _filter_admin_author(text_query, author_id)
+        if date_from:
+            text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) >= date_from.strip())
+        if date_to:
+            text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) <= date_to.strip())
+        total += session.exec(text_query).one()
+
+    return {"count": total}
 
 
 @router.get("/admin/search")
@@ -279,10 +362,25 @@ def search_admin_posts(
     post_matches = session.exec(post_query).all()
     text_matches = session.exec(text_query).all() if text_query is not None else []
 
+    text_post_ids = {text.post_id for text in text_matches}
+    text_posts = session.exec(select(Post).where(Post.id.in_(text_post_ids))).all() if text_post_ids else []
+    text_posts_by_id = {post.id: post for post in text_posts}
+    author_ids = {
+        author_id
+        for author_id in [
+            *(post.author_id for post in post_matches),
+            *(post.author_id for post in text_posts),
+            *(text.author_id for text in text_matches),
+        ]
+        if author_id is not None
+    }
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+
     results = []
 
     for post in post_matches:
-        author = session.get(Author, post.author_id) if post.author_id else None
+        author = authors_by_id.get(post.author_id)
         obj = _enrich(post, author)
         obj["result_id"] = f"post-{post.id}"
         obj["result_type"] = "post" if post.parent_id is None else "x-reply"
@@ -305,11 +403,11 @@ def search_admin_posts(
         results.append(obj)
 
     for text in text_matches:
-        post = session.get(Post, text.post_id)
+        post = text_posts_by_id.get(text.post_id)
         if not post:
             continue
-        author = session.get(Author, text.author_id) if text.author_id else None
-        post_author = session.get(Author, post.author_id) if post.author_id else None
+        author = authors_by_id.get(text.author_id)
+        post_author = authors_by_id.get(post.author_id)
         selected_text_fields = []
         if include_text:
             selected_text_fields.append(text.content)
