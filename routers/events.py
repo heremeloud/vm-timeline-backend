@@ -53,6 +53,44 @@ def _safe_dump_urls(urls: Optional[List[str]]) -> str:
     return json.dumps(list(dict.fromkeys(clean)), ensure_ascii=False)
 
 
+def _filter_events_by_author(query, author: Optional[str], session: Session):
+    if not author:
+        return query
+
+    author_lower = author.strip().lower()
+    view = session.exec(select(Author).where(Author.name.ilike("view"))).first()
+    mim = session.exec(select(Author).where(Author.name.ilike("mim"))).first()
+    vimmy = session.exec(select(Author).where(Author.name.ilike("vimmy"))).first()
+    view_event_ids = {
+        link.event_id for link in session.exec(
+            select(EventAuthorLink).where(EventAuthorLink.author_id == view.id)
+        ).all()
+    } if view else set()
+    mim_event_ids = {
+        link.event_id for link in session.exec(
+            select(EventAuthorLink).where(EventAuthorLink.author_id == mim.id)
+        ).all()
+    } if mim else set()
+    vimmy_event_ids = {
+        link.event_id for link in session.exec(
+            select(EventAuthorLink).where(EventAuthorLink.author_id == vimmy.id)
+        ).all()
+    } if vimmy else set()
+
+    if author_lower == "viewmim":
+        allowed = list(view_event_ids & mim_event_ids)
+    elif author_lower == "view":
+        allowed = list(view_event_ids - mim_event_ids)
+    elif author_lower == "mim":
+        allowed = list(mim_event_ids - view_event_ids)
+    elif author_lower == "vimmy":
+        allowed = list(vimmy_event_ids)
+    else:
+        allowed = []
+
+    return query.where(Event.id.in_(allowed)) if allowed else query.where(Event.id == -1)
+
+
 def _clean_live_media_items(items) -> List[Dict[str, Optional[str]]]:
     clean = []
     for item in items or []:
@@ -451,6 +489,9 @@ def list_admin_events(
     name: Optional[str] = None,
     category: Optional[str] = None,
     subcategory: Optional[str] = None,
+    author: Optional[str] = None,
+    visible_start: Optional[str] = None,
+    visible_end: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(Event)
@@ -470,6 +511,13 @@ def list_admin_events(
         query = query.where(Event.category == category.strip().lower())
     if subcategory:
         query = query.where(Event.subcategory == subcategory.strip().lower())
+
+    query = _filter_events_by_author(query, author, session)
+
+    if visible_start:
+        query = query.where(func.coalesce(Event.end_date, Event.start_date, Event.event_date) >= visible_start.strip())
+    if visible_end:
+        query = query.where(func.coalesce(Event.start_date, Event.event_date) <= visible_end.strip())
 
     if sort == "oldest":
         query = query.order_by(Event.start_date, Event.id)
@@ -565,26 +613,7 @@ def list_events(
         if visible_start:
             query = query.where(event_end >= visible_start.strip())
 
-    if author:
-        author_lower = author.strip().lower()
-        view = session.exec(select(Author).where(Author.name.ilike("view"))).first()
-        mim  = session.exec(select(Author).where(Author.name.ilike("mim"))).first()
-        view_event_ids = {l.event_id for l in session.exec(select(EventAuthorLink).where(EventAuthorLink.author_id == view.id)).all()} if view else set()
-        mim_event_ids  = {l.event_id for l in session.exec(select(EventAuthorLink).where(EventAuthorLink.author_id == mim.id)).all()} if mim else set()
-
-        if author_lower == "viewmim":
-            # Events with BOTH View and Mim (couple events)
-            allowed = list(view_event_ids & mim_event_ids)
-        elif author_lower == "view":
-            # Events with View but NOT Mim (solo View)
-            allowed = list(view_event_ids - mim_event_ids)
-        elif author_lower == "mim":
-            # Events with Mim but NOT View (solo Mim)
-            allowed = list(mim_event_ids - view_event_ids)
-        else:
-            allowed = []
-
-        query = query.where(Event.id.in_(allowed)) if allowed else query.where(Event.id == -1)
+    query = _filter_events_by_author(query, author, session)
 
     if sort == "oldest":
         query = query.order_by(Event.start_date, Event.id)
