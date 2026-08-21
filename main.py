@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database import create_db_and_tables, run_migrations
+from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES, PROJECT_CATEGORIES
 from middleware.rate_limit import RateLimiter
 
 # Routers
@@ -49,6 +50,21 @@ def on_startup():
 @app.get("/", include_in_schema=False)
 def root():
     return RedirectResponse(url="/docs")
+
+
+@app.get("/categories", tags=["Categories"])
+def list_categories():
+    """Return every valid category name used by the API."""
+    return {
+        "events": [
+            {
+                "name": category,
+                "subcategories": EVENT_SUBCATEGORIES.get(category, []),
+            }
+            for category in EVENT_CATEGORIES
+        ],
+        "projects": PROJECT_CATEGORIES,
+    }
 
 
 # ---------------------------------------------------------
