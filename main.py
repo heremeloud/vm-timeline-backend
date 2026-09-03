@@ -84,7 +84,7 @@ app.include_router(media.router)     # /media/upload
 # CORS
 # ---------------------------------------------------------
 app.add_middleware(
-    CORSMiddleware,
+    # CORSMiddleware,
     allow_origins=["https://viewmim.info","https://vm-social.vercel.app", "https://viewmim.vercel.app"],  
     # allow_origins=["*"],   
     allow_credentials=True,
