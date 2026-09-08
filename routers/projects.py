@@ -10,6 +10,7 @@ from database import get_session
 from models import Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
 from constants import PROJECT_CATEGORIES
+from character_map import CharacterMapData
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -62,6 +63,16 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     ).all()
 
     obj = p.dict()
+    obj["character_map"] = json.loads(obj.pop("character_map_json") or "null")
+    if obj["character_map"]:
+        characters = obj["character_map"]["characters"]
+        cast_ids = {character.get("author_id") for character in characters if character.get("author_id")}
+        cast = session.exec(select(Author).where(Author.id.in_(cast_ids))).all() if cast_ids else []
+        cast_by_id = {author.id: author for author in cast}
+        for character in characters:
+            author = cast_by_id.get(character.get("author_id"))
+            if author:
+                character["actor"] = author.name
     obj["playlists"] = playlists
     obj["authors"] = [
         {
@@ -326,6 +337,8 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
+    show_character_map: Optional[bool] = None
+    character_map: Optional[CharacterMapData] = None
     title: Optional[str] = None
     original_title: Optional[str] = None
     hashtag: Optional[str] = None
@@ -525,6 +538,13 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    if payload.character_map is not None:
+        cast = _ensure_authors(session, [character.author_id for character in payload.character_map.characters if character.author_id is not None])
+        cast_by_id = {author.id: author for author in cast}
+        for character in payload.character_map.characters:
+            if character.author_id is not None:
+                character.actor = cast_by_id[character.author_id].name
+
     if payload.title is not None:
         t = payload.title.strip()
         if not t:
@@ -559,6 +579,10 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.thumbnail_focal_y = payload.thumbnail_focal_y
     if payload.is_visible is not None:
         p.is_visible = payload.is_visible
+    if payload.show_character_map is not None:
+        p.show_character_map = payload.show_character_map
+    if payload.character_map is not None:
+        p.character_map_json = payload.character_map.model_dump_json()
     if payload.year is not None:
         p.year = payload.year
     if payload.episode_count is not None:

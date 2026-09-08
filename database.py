@@ -343,6 +343,14 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to project")
 
+        if "show_character_map" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN show_character_map BOOLEAN NOT NULL DEFAULT 1"))
+            conn.commit()
+
+        if "character_map_json" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN character_map_json TEXT"))
+            conn.commit()
+
         if "episode_count" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN episode_count INTEGER"))
             conn.commit()

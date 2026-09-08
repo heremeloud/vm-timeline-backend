@@ -228,6 +228,8 @@ class TopicItem(SQLModel, table=True):
 # ============================================================
 class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    show_character_map: bool = Field(default=True)
+    character_map_json: Optional[str] = None
 
     title: str = Field(index=True)
     original_title: Optional[str] = None          # Thai title
