@@ -62,6 +62,10 @@ class CharacterGroup(BaseModel):
     character_ids: List[str] = Field(default_factory=list, max_length=40)
     padding_x: float = Field(default=15, ge=4, le=40)
     padding_y: float = Field(default=22, ge=4, le=40)
+    padding_top: Optional[float] = Field(default=None, ge=4, le=40)
+    padding_bottom: Optional[float] = Field(default=None, ge=4, le=40)
+    padding_left: Optional[float] = Field(default=None, ge=4, le=40)
+    padding_right: Optional[float] = Field(default=None, ge=4, le=40)
     label_position: Literal["top", "bottom"] = "top"
 
 
