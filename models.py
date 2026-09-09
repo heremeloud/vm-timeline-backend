@@ -334,3 +334,9 @@ class Event(SQLModel, table=True):
     )
 
     project: Optional["Project"] = Relationship(back_populates="events")
+
+
+class ProjectCharacterMap(SQLModel, table=True):
+    __tablename__ = "project_character_map"
+    project_id: int = Field(primary_key=True, foreign_key="project.id")
+    data_json: str

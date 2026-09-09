@@ -7,7 +7,7 @@ from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
 from database import get_session
-from models import Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
+from models import ProjectCharacterMap, Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
 from constants import PROJECT_CATEGORIES
 from character_map import CharacterMapData
@@ -63,7 +63,9 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     ).all()
 
     obj = p.dict()
-    obj["character_map"] = json.loads(obj.pop("character_map_json") or "null")
+    legacy_map = obj.pop("character_map_json", None)
+    saved_map = session.get(ProjectCharacterMap, p.id)
+    obj["character_map"] = json.loads(saved_map.data_json if saved_map else legacy_map or "null")
     if obj["character_map"]:
         characters = obj["character_map"]["characters"]
         cast_ids = {character.get("author_id") for character in characters if character.get("author_id")}
@@ -582,7 +584,13 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
     if payload.show_character_map is not None:
         p.show_character_map = payload.show_character_map
     if payload.character_map is not None:
-        p.character_map_json = payload.character_map.model_dump_json()
+        saved_map = session.get(ProjectCharacterMap, project_id)
+        if saved_map is None:
+            saved_map = ProjectCharacterMap(project_id=project_id, data_json=payload.character_map.model_dump_json())
+        else:
+            saved_map.data_json = payload.character_map.model_dump_json()
+        session.add(saved_map)
+        p.character_map_json = None
     if payload.year is not None:
         p.year = payload.year
     if payload.episode_count is not None:
@@ -664,6 +672,10 @@ def delete_project(project_id: int, session: Session = Depends(get_session)):
     for l in links:
         session.delete(l)
 
+    saved_map = session.get(ProjectCharacterMap, project_id)
+    if saved_map:
+        session.delete(saved_map)
+        session.flush()
     session.delete(p)
     session.commit()
     return {"status": "deleted", "id": project_id}

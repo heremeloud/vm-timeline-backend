@@ -2,6 +2,12 @@ from typing import List, Literal, Optional, Annotated, Dict
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class CharacterState(BaseModel):
+    """When a character joins the story, and when they leave it."""
+    episode: int = Field(ge=1, le=1000)
+    hidden: bool = False
+
+
 class Character(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=120)
@@ -13,6 +19,14 @@ class Character(BaseModel):
     description: str = Field(default="", max_length=5000)
     tone: str = Field(default="#b76d79", max_length=20)
     size: Literal["large", "medium", "small"] = "medium"
+    changes: List[CharacterState] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def unique_character_episodes(self):
+        episodes = [change.episode for change in self.changes]
+        if len(set(episodes)) != len(episodes):
+            raise ValueError("Use only one change per episode for each character")
+        return self
     x: float = Field(default=50, ge=12, le=88)
     y: float = Field(default=30, ge=18, le=82)
 

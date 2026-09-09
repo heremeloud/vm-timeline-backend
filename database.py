@@ -351,6 +351,9 @@ def run_migrations():
             conn.execute(text("ALTER TABLE project ADD COLUMN character_map_json TEXT"))
             conn.commit()
 
+        migrate_character_maps(conn)
+        conn.commit()
+
         if "episode_count" not in project_cols:
             conn.execute(text("ALTER TABLE project ADD COLUMN episode_count INTEGER"))
             conn.commit()
@@ -458,3 +461,9 @@ def run_migrations():
 def get_session():
     with Session(engine) as session:
         yield session
+
+
+def migrate_character_maps(conn):
+    """Copy legacy maps without overwriting newer dedicated records."""
+    conn.execute(text("CREATE TABLE IF NOT EXISTS project_character_map (project_id INTEGER PRIMARY KEY REFERENCES project(id), data_json TEXT NOT NULL)"))
+    conn.execute(text("INSERT INTO project_character_map (project_id, data_json) SELECT id, character_map_json FROM project WHERE character_map_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM project_character_map WHERE project_id = project.id)"))
