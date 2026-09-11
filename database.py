@@ -176,6 +176,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to event")
 
+        for column in ("media_urls_json", "dates_json", "photo_items_json"):
+            if column not in event_cols:
+                conn.execute(text(f"ALTER TABLE event ADD COLUMN {column} VARCHAR NOT NULL DEFAULT '[]'"))
+                conn.commit()
+
         if "english_name" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN english_name VARCHAR"))
             conn.commit()

@@ -311,6 +311,9 @@ class Event(SQLModel, table=True):
     category: Optional[str] = Field(default=None, index=True)  # e.g. show, live, interview, event, fan meet
     subcategory: Optional[str] = Field(default=None, index=True)
     tags_json: str = Field(default="[]")           # list[str] stored as JSON
+    photo_items_json: str = Field(default="[]")
+    media_urls_json: str = Field(default="[]")
+    dates_json: str = Field(default="[]")
     media_url: Optional[str] = None                # one image url
     media_focal_x: Optional[float] = None          # 0-100, % from left
     media_focal_y: Optional[float] = None          # 0-100, % from top

@@ -6,6 +6,7 @@ from sqlalchemy import case, func, nullslast, nullsfirst
 from typing import Optional, List, Any, Dict
 from pydantic import BaseModel
 
+from event_photos import event_photos
 from database import get_session
 from models import ProjectCharacterMap, Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
@@ -128,6 +129,9 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
             "id": e.id,
             "name": e.name,
             "english_name": e.english_name,
+            "photo_items": event_photos(e),
+            "dates": json.loads(e.dates_json or "[]"),
+            "media_urls": json.loads(e.media_urls_json or "[]") or ([e.media_url] if e.media_url else []),
             "event_date": e.event_date,
             "start_date": e.start_date or e.event_date,
             "end_date": e.end_date,

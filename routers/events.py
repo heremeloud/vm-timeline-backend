@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, and_
 from typing import Optional, List, Any, Dict
 import json
+from datetime import date
 
+from event_photos import EventPhoto, clean_photos, event_photos, set_event_photos
 from database import get_session
 from models import Event, Author, EventAuthorLink, Project, ProjectEpisode
 from middleware.auth import require_admin
@@ -51,6 +53,41 @@ def _safe_parse_urls(urls_json: str) -> List[str]:
 def _safe_dump_urls(urls: Optional[List[str]]) -> str:
     clean = [str(url).strip() for url in (urls or []) if str(url).strip()]
     return json.dumps(list(dict.fromkeys(clean)), ensure_ascii=False)
+
+
+def _clean_dates(values):
+    result = sorted({value.strip() for value in (values or []) if value.strip()})
+    for value in result:
+        try:
+            if date.fromisoformat(value).isoformat() != value:
+                raise ValueError()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Event dates must use YYYY-MM-DD")
+    return result
+
+
+def _event_collections(ev):
+    return {
+        "photo_items": event_photos(ev),
+        "dates": _safe_parse_urls(ev.dates_json),
+        "media_urls": _safe_parse_urls(ev.media_urls_json) or ([ev.media_url] if ev.media_url else []),
+    }
+
+
+def _filter_event_dates(query, start, end):
+    if not start and not end:
+        return query
+    # SQLite JSON table expansion matches individual occurrences before pagination.
+    occurrences = func.json_each(Event.dates_json).table_valued("value").alias("event_dates")
+    specific = select(1).select_from(occurrences)
+    range_conditions = [Event.dates_json == "[]"]
+    if start:
+        specific = specific.where(occurrences.c.value >= start.strip())
+        range_conditions.append(func.coalesce(Event.end_date, Event.start_date, Event.event_date) >= start.strip())
+    if end:
+        specific = specific.where(occurrences.c.value <= end.strip())
+        range_conditions.append(func.coalesce(Event.start_date, Event.event_date) <= end.strip())
+    return query.where(or_(specific.exists(), and_(*range_conditions)))
 
 
 def _filter_events_by_author(query, author: Optional[str], session: Session):
@@ -136,6 +173,10 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
         authors = [by_id[i] for i in author_ids if i in by_id]
 
     obj = ev.dict()
+    obj.update(_event_collections(ev))
+    obj.pop("dates_json", None)
+    obj.pop("media_urls_json", None)
+    obj.pop("photo_items_json", None)
     obj["start_date"] = getattr(ev, "start_date", None) or getattr(ev, "event_date", None)
     obj["end_date"] = getattr(ev, "end_date", None)
 
@@ -195,6 +236,7 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
             "event_date": c.event_date,
             "start_date": c.start_date or c.event_date,
             "end_date": c.end_date,
+            **_event_collections(c),
             "category": c.category,
             "subcategory": c.subcategory,
         }
@@ -257,6 +299,10 @@ def _serialize_event_list(session: Session, events: List[Event], include_private
     serialized = []
     for ev in events:
         obj = ev.dict()
+        obj.update(_event_collections(ev))
+        obj.pop("dates_json", None)
+        obj.pop("media_urls_json", None)
+        obj.pop("photo_items_json", None)
         obj["start_date"] = ev.start_date or ev.event_date
         obj["end_date"] = ev.end_date
         obj["tags"] = _safe_parse_tags(ev.tags_json)
@@ -296,6 +342,7 @@ def _serialize_event_list(session: Session, events: List[Event], include_private
                 "event_date": child.event_date,
                 "start_date": child.start_date or child.event_date,
                 "end_date": child.end_date,
+                **_event_collections(child),
                 "category": child.category,
                 "subcategory": child.subcategory,
             }
@@ -362,6 +409,9 @@ class EventCreate(BaseModel):
     category: Optional[str] = None
     subcategory: Optional[str] = None
     tags: Optional[List[str]] = None
+    photo_items: Optional[List[EventPhoto]] = None
+    media_urls: Optional[List[str]] = None
+    dates: Optional[List[str]] = None
     media_url: Optional[str] = None
     media_focal_x: Optional[float] = None
     media_focal_y: Optional[float] = None
@@ -386,6 +436,9 @@ class EventUpdate(BaseModel):
     category: Optional[str] = None
     subcategory: Optional[str] = None
     tags: Optional[List[str]] = None
+    photo_items: Optional[List[EventPhoto]] = None
+    media_urls: Optional[List[str]] = None
+    dates: Optional[List[str]] = None
     media_url: Optional[str] = None
     media_focal_x: Optional[float] = None
     media_focal_y: Optional[float] = None
@@ -442,6 +495,7 @@ def get_event_tag_index(session: Session = Depends(get_session)):
             "subcategory": event.subcategory,
             "start_date": event.start_date or event.event_date,
             "end_date": event.end_date,
+            **_event_collections(event),
             "project_id": event.project_id,
         }
         for event in events
@@ -514,10 +568,7 @@ def list_admin_events(
 
     query = _filter_events_by_author(query, author, session)
 
-    if visible_start:
-        query = query.where(func.coalesce(Event.end_date, Event.start_date, Event.event_date) >= visible_start.strip())
-    if visible_end:
-        query = query.where(func.coalesce(Event.start_date, Event.event_date) <= visible_end.strip())
+    query = _filter_event_dates(query, visible_start, visible_end)
 
     if sort == "oldest":
         query = query.order_by(Event.start_date, Event.id)
@@ -604,14 +655,7 @@ def list_events(
     if subcategory:
         query = query.where(Event.subcategory == subcategory.strip().lower())
 
-    if visible_start or visible_end:
-        event_start = func.coalesce(Event.start_date, Event.event_date)
-        event_end = func.coalesce(Event.end_date, Event.start_date, Event.event_date)
-
-        if visible_end:
-            query = query.where(event_start <= visible_end.strip())
-        if visible_start:
-            query = query.where(event_end >= visible_start.strip())
+    query = _filter_event_dates(query, visible_start, visible_end)
 
     query = _filter_events_by_author(query, author, session)
 
@@ -657,6 +701,10 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
 
     start_date = (payload.start_date or payload.event_date or "").strip() or None
     end_date = (payload.end_date or "").strip() or None
+    dates = _clean_dates(payload.dates)
+    media_urls = _safe_parse_urls(_safe_dump_urls(payload.media_urls))
+    if dates:
+        start_date, end_date = dates[0], dates[-1]
     live_media_items = _clean_live_media_items(payload.live_media_items)
     if not live_media_items:
         live_media_items = _clean_live_media_items(
@@ -671,7 +719,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         category=category,
         subcategory=subcategory,
         tags_json=_safe_dump_tags(payload.tags),
-        media_url=(payload.media_url.strip() if payload.media_url else None),
+        dates_json=json.dumps(dates),
+        media_urls_json=_safe_dump_urls(media_urls),
+        media_url=media_urls[0] if media_urls else (payload.media_url.strip() if payload.media_url else None),
         media_focal_x=payload.media_focal_x,
         media_focal_y=payload.media_focal_y,
         event_date=start_date,
@@ -686,6 +736,11 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         parent_event_id=payload.parent_event_id,
         is_visible=payload.is_visible,
     )
+
+    if _field_was_sent(payload, "photo_items"):
+        set_event_photos(ev, clean_photos(payload.photo_items))
+    else:
+        set_event_photos(ev, event_photos(ev))
 
     session.add(ev)
     session.commit()
@@ -756,6 +811,33 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
 
     if _field_was_sent(payload, "end_date"):
         ev.end_date = payload.end_date.strip() if payload.end_date else None
+
+    if _field_was_sent(payload, "dates"):
+        dates = _clean_dates(payload.dates)
+        ev.dates_json = json.dumps(dates)
+        if dates:
+            ev.start_date = ev.event_date = dates[0]
+            ev.end_date = dates[-1]
+    elif any(_field_was_sent(payload, field) for field in ("start_date", "end_date", "event_date")):
+        ev.dates_json = "[]"
+
+    if _field_was_sent(payload, "photo_items"):
+        set_event_photos(ev, clean_photos(payload.photo_items))
+    elif any(_field_was_sent(payload, field) for field in ("media_urls", "media_url", "media_focal_x", "media_focal_y")):
+        existing = {photo["url"]: photo for photo in event_photos(ev)}
+        if _field_was_sent(payload, "media_urls"):
+            urls = _safe_parse_urls(_safe_dump_urls(payload.media_urls))
+        elif _field_was_sent(payload, "media_url"):
+            urls = [ev.media_url] if ev.media_url else []
+        else:
+            urls = list(existing)
+        photos = [existing.get(url, {"url": url, "focal_x": 50, "focal_y": 50}).copy() for url in urls]
+        if photos:
+            for axis in ("x", "y"):
+                if _field_was_sent(payload, f"media_focal_{axis}"):
+                    value = getattr(payload, f"media_focal_{axis}")
+                    photos[0][f"focal_{axis}"] = value if value is not None else 50
+        set_event_photos(ev, clean_photos(photos))
 
     if payload.tags is not None:
         ev.tags_json = _safe_dump_tags(payload.tags)
