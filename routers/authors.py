@@ -14,7 +14,9 @@ router = APIRouter(prefix="/authors", tags=["Authors"])
 
 class AuthorUpdate(SQLModel):
     name: Optional[str] = None
+    nickname: Optional[str] = None
     full_name: Optional[str] = None
+    category: Optional[str] = None
     profile_photo_url: Optional[str] = None
     ig_pfp_url: Optional[str] = None
     twitter_pfp_url: Optional[str] = None

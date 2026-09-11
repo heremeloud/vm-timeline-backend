@@ -437,6 +437,17 @@ def run_migrations():
             conn.commit()
             print("Migration: added show_on_timeline to author")
 
+        if "nickname" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN nickname VARCHAR"))
+            conn.commit()
+            print("Migration: added nickname to author")
+
+        if "category" not in author_cols:
+            conn.execute(text("ALTER TABLE author ADD COLUMN category VARCHAR DEFAULT 'artist'"))
+            conn.execute(text("UPDATE author SET category = 'artist' WHERE category IS NULL OR trim(category) = ''"))
+            conn.commit()
+            print("Migration: added category to author")
+
         # ── topic table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(topic)"))
         topic_cols = {row[1] for row in result}

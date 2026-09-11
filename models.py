@@ -29,7 +29,9 @@ class Author(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
     name: str = Field(index=True, unique=True)
+    nickname: Optional[str] = None
     full_name: Optional[str] = None          # full legal/stage name
+    category: str = Field(default="artist")  # artist | crew | official | family_friend | fan
     profile_photo_url: Optional[str] = None
     ig_pfp_url: Optional[str] = None
     twitter_pfp_url: Optional[str] = None
@@ -228,7 +230,7 @@ class TopicItem(SQLModel, table=True):
 # ============================================================
 class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    show_character_map: bool = Field(default=True)
+    show_character_map: bool = Field(default=False)
     character_map_json: Optional[str] = None
 
     title: str = Field(index=True)
