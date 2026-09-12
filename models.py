@@ -230,8 +230,8 @@ class TopicItem(SQLModel, table=True):
 # ============================================================
 class Project(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    show_character_map: bool = Field(default=False)
-    character_map_json: Optional[str] = None
+    show_relationship_chart: bool = Field(default=False)
+    relationship_chart_json: Optional[str] = None
 
     title: str = Field(index=True)
     original_title: Optional[str] = None          # Thai title
@@ -341,7 +341,7 @@ class Event(SQLModel, table=True):
     project: Optional["Project"] = Relationship(back_populates="events")
 
 
-class ProjectCharacterMap(SQLModel, table=True):
-    __tablename__ = "project_character_map"
+class ProjectRelationshipChart(SQLModel, table=True):
+    __tablename__ = "project_relationship_chart"
     project_id: int = Field(primary_key=True, foreign_key="project.id")
     data_json: str

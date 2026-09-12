@@ -348,15 +348,21 @@ def run_migrations():
             conn.commit()
             print("Migration: added is_visible to project")
 
-        if "show_character_map" not in project_cols:
-            conn.execute(text("ALTER TABLE project ADD COLUMN show_character_map BOOLEAN NOT NULL DEFAULT 1"))
+        if "show_relationship_chart" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN show_relationship_chart BOOLEAN NOT NULL DEFAULT 1"))
+            if "show_character_map" in project_cols:
+                conn.execute(text("UPDATE project SET show_relationship_chart = show_character_map"))
             conn.commit()
+            print("Migration: added show_relationship_chart to project")
 
-        if "character_map_json" not in project_cols:
-            conn.execute(text("ALTER TABLE project ADD COLUMN character_map_json TEXT"))
+        if "relationship_chart_json" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN relationship_chart_json TEXT"))
+            if "character_map_json" in project_cols:
+                conn.execute(text("UPDATE project SET relationship_chart_json = character_map_json"))
             conn.commit()
+            print("Migration: added relationship_chart_json to project")
 
-        migrate_character_maps(conn)
+        migrate_relationship_charts(conn)
         conn.commit()
 
         if "episode_count" not in project_cols:
@@ -479,7 +485,22 @@ def get_session():
         yield session
 
 
-def migrate_character_maps(conn):
-    """Copy legacy maps without overwriting newer dedicated records."""
-    conn.execute(text("CREATE TABLE IF NOT EXISTS project_character_map (project_id INTEGER PRIMARY KEY REFERENCES project(id), data_json TEXT NOT NULL)"))
-    conn.execute(text("INSERT INTO project_character_map (project_id, data_json) SELECT id, character_map_json FROM project WHERE character_map_json IS NOT NULL AND NOT EXISTS (SELECT 1 FROM project_character_map WHERE project_id = project.id)"))
+def migrate_relationship_charts(conn):
+    """Move legacy chart data into the relationship-chart table without overwriting newer records."""
+    conn.execute(text("CREATE TABLE IF NOT EXISTS project_relationship_chart (project_id INTEGER PRIMARY KEY REFERENCES project(id), data_json TEXT NOT NULL)"))
+    table_names = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))}
+    if "project_character_map" in table_names:
+        conn.execute(text(
+            "INSERT INTO project_relationship_chart (project_id, data_json) "
+            "SELECT project_id, data_json FROM project_character_map "
+            "WHERE NOT EXISTS (SELECT 1 FROM project_relationship_chart WHERE project_id = project_character_map.project_id)"
+        ))
+
+    project_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(project)"))}
+    for source_column in ("relationship_chart_json", "character_map_json"):
+        if source_column in project_cols:
+            conn.execute(text(
+                f"INSERT INTO project_relationship_chart (project_id, data_json) "
+                f"SELECT id, {source_column} FROM project WHERE {source_column} IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM project_relationship_chart WHERE project_id = project.id)"
+            ))

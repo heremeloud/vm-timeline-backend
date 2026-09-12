@@ -8,10 +8,10 @@ from pydantic import BaseModel
 
 from event_photos import event_photos
 from database import get_session
-from models import ProjectCharacterMap, Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
+from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
 from constants import PROJECT_CATEGORIES
-from character_map import CharacterMapData
+from relationship_chart import RelationshipChartData
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -64,11 +64,11 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     ).all()
 
     obj = p.dict()
-    legacy_map = obj.pop("character_map_json", None)
-    saved_map = session.get(ProjectCharacterMap, p.id)
-    obj["character_map"] = json.loads(saved_map.data_json if saved_map else legacy_map or "null")
-    if obj["character_map"]:
-        characters = obj["character_map"]["characters"]
+    legacy_chart = obj.pop("relationship_chart_json", None)
+    saved_chart = session.get(ProjectRelationshipChart, p.id)
+    obj["relationship_chart"] = json.loads(saved_chart.data_json if saved_chart else legacy_chart or "null")
+    if obj["relationship_chart"]:
+        characters = obj["relationship_chart"]["characters"]
         cast_ids = {character.get("author_id") for character in characters if character.get("author_id")}
         cast = session.exec(select(Author).where(Author.id.in_(cast_ids))).all() if cast_ids else []
         cast_by_id = {author.id: author for author in cast}
@@ -343,8 +343,8 @@ class ProjectCreate(BaseModel):
 
 
 class ProjectUpdate(BaseModel):
-    show_character_map: Optional[bool] = None
-    character_map: Optional[CharacterMapData] = None
+    show_relationship_chart: Optional[bool] = None
+    relationship_chart: Optional[RelationshipChartData] = None
     title: Optional[str] = None
     original_title: Optional[str] = None
     hashtag: Optional[str] = None
@@ -544,10 +544,10 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    if payload.character_map is not None:
-        cast = _ensure_authors(session, [character.author_id for character in payload.character_map.characters if character.author_id is not None])
+    if payload.relationship_chart is not None:
+        cast = _ensure_authors(session, [character.author_id for character in payload.relationship_chart.characters if character.author_id is not None])
         cast_by_id = {author.id: author for author in cast}
-        for character in payload.character_map.characters:
+        for character in payload.relationship_chart.characters:
             if character.author_id is not None:
                 character.actor = cast_by_id[character.author_id].name
 
@@ -585,16 +585,16 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.thumbnail_focal_y = payload.thumbnail_focal_y
     if payload.is_visible is not None:
         p.is_visible = payload.is_visible
-    if payload.show_character_map is not None:
-        p.show_character_map = payload.show_character_map
-    if payload.character_map is not None:
-        saved_map = session.get(ProjectCharacterMap, project_id)
-        if saved_map is None:
-            saved_map = ProjectCharacterMap(project_id=project_id, data_json=payload.character_map.model_dump_json())
+    if payload.show_relationship_chart is not None:
+        p.show_relationship_chart = payload.show_relationship_chart
+    if payload.relationship_chart is not None:
+        saved_chart = session.get(ProjectRelationshipChart, project_id)
+        if saved_chart is None:
+            saved_chart = ProjectRelationshipChart(project_id=project_id, data_json=payload.relationship_chart.model_dump_json())
         else:
-            saved_map.data_json = payload.character_map.model_dump_json()
-        session.add(saved_map)
-        p.character_map_json = None
+            saved_chart.data_json = payload.relationship_chart.model_dump_json()
+        session.add(saved_chart)
+        p.relationship_chart_json = None
     if payload.year is not None:
         p.year = payload.year
     if payload.episode_count is not None:
@@ -676,9 +676,9 @@ def delete_project(project_id: int, session: Session = Depends(get_session)):
     for l in links:
         session.delete(l)
 
-    saved_map = session.get(ProjectCharacterMap, project_id)
-    if saved_map:
-        session.delete(saved_map)
+    saved_chart = session.get(ProjectRelationshipChart, project_id)
+    if saved_chart:
+        session.delete(saved_chart)
         session.flush()
     session.delete(p)
     session.commit()

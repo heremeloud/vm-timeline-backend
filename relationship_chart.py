@@ -72,6 +72,7 @@ class CharacterGroup(BaseModel):
     thai_name: str = Field(default="", max_length=120)
     description: str = Field(default="", max_length=5000)
     shape: Literal["circle", "rectangle"] = "rectangle"
+    line_style: Literal["solid", "dashed", "dotted"] = "solid"
     color: str = Field(default="#a67c52", pattern=r"^#[0-9a-fA-F]{6}$")
     character_ids: List[str] = Field(default_factory=list, max_length=40)
     padding_x: float = Field(default=15, ge=4, le=40)
@@ -83,7 +84,7 @@ class CharacterGroup(BaseModel):
     label_position: Literal["top", "bottom"] = "top"
 
 
-class CharacterMapData(BaseModel):
+class RelationshipChartData(BaseModel):
     texts: Dict[str, Annotated[str, Field(max_length=1000)]] = Field(default_factory=dict, max_length=40)
     groups: List[CharacterGroup] = Field(default_factory=list, max_length=20)
     canvas_height: Optional[float] = Field(default=None, ge=360, le=3000)
@@ -111,7 +112,7 @@ class CharacterMapData(BaseModel):
             raise ValueError("Relationship IDs must be unique")
         for relationship in self.relationships:
             if self.episodes is not None and any(change.episode not in self.episodes for change in relationship.changes):
-                raise ValueError("Relationship changes must use an episode in the character map")
+                raise ValueError("Relationship changes must use an episode in the relationship chart")
             if relationship.source not in ids or relationship.target not in ids:
                 raise ValueError("Relationships must connect existing characters")
             if relationship.source == relationship.target:

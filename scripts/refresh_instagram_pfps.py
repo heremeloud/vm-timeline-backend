@@ -183,12 +183,20 @@ def extract_profile_photo_url(page_html: str, username: str) -> str | None:
     return None
 
 
+class InstagramRateLimitError(LookupError):
+    """Stop the batch when Instagram asks us to slow down."""
+
+
 def fetch_profile_photo_url(username: str, timeout: int, cookie: str | None) -> str | None:
     api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
+    diagnostics = []
     try:
         body, _ = request_bytes(api_url, build_api_headers(cookie), timeout)
         data = json.loads(body.decode("utf-8", errors="replace"))
-        user = data.get("data", {}).get("user", {})
+        payload = data.get("data") if isinstance(data, dict) else None
+        user = (payload.get("user") if isinstance(payload, dict) else None) or {}
+        if not isinstance(user, dict):
+            user = {}
         # Guard against ever again saving a photo for the wrong account, in case the
         # API misbehaves: only trust a result that actually says it's this username.
         if (user.get("username") or "").lower() != username.lower():
@@ -196,12 +204,29 @@ def fetch_profile_photo_url(username: str, timeout: int, cookie: str | None) -> 
         found = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
         if found:
             return found
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError):
-        pass
+        diagnostics.append("API returned no matching profile photo (session may be expired or challenged)")
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise InstagramRateLimitError("API HTTP 429: rate limited; stop and retry later") from exc
+        reason = {401: "session rejected", 403: "access denied or session challenged", 429: "rate limited"}.get(exc.code, "request rejected")
+        diagnostics.append(f"API HTTP {exc.code}: {reason}")
+    except json.JSONDecodeError:
+        diagnostics.append("API returned non-JSON content (possibly a login page)")
+    except (URLError, TimeoutError, OSError) as exc:
+        diagnostics.append(f"API network error: {type(exc).__name__}")
 
     profile_url = f"https://www.instagram.com/{username}/"
-    body, _ = request_bytes(profile_url, build_page_headers(cookie), timeout)
-    return extract_profile_photo_url(body.decode("utf-8", errors="replace"), username)
+    try:
+        body, _ = request_bytes(profile_url, build_page_headers(cookie), timeout)
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise InstagramRateLimitError("Profile page HTTP 429: rate limited; stop and retry later") from exc
+        raise LookupError("; ".join(diagnostics + [f"profile page HTTP {exc.code}"])) from exc
+    photo = extract_profile_photo_url(body.decode("utf-8", errors="replace"), username)
+    if photo:
+        return photo
+    diagnostics.append("profile page contained no verified photo")
+    raise LookupError("; ".join(diagnostics))
 
 
 def extension_for(content_type: str, url: str) -> str:
@@ -373,11 +398,16 @@ def main() -> int:
             label = f"#{author.id} {author.name}"
             try:
                 ok, message = refresh_author(conn, author, args.dry_run, args.force, args.timeout, cookie)
+            except InstagramRateLimitError as exc:
+                failures += 1
+                print(f"{label}: failed: {exc}")
+                print("Stopped early to avoid more rate-limited requests. Existing photos are unchanged for this author.")
+                break
             except HTTPError as exc:
                 ok = False
                 message = f"failed: rate limited by Instagram (429) - wait a while or increase --delay" \
                     if exc.code == 429 else f"failed: {exc}"
-            except (URLError, TimeoutError, OSError) as exc:
+            except (URLError, TimeoutError, OSError, LookupError) as exc:
                 ok = False
                 message = f"failed: {exc}"
 
