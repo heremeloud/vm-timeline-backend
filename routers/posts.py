@@ -1,4 +1,5 @@
 import json
+import os
 from collections import defaultdict
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +9,16 @@ from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
 from models import Post, PostText, Author
 from middleware.auth import require_admin
+from instagram_archive import (
+    InstagramArchiveError,
+    InstagramArchiveRateLimitError,
+    InstagramArchiveSessionError,
+    InstagramPostBrowser,
+    archive_cookie,
+    extension_for_media,
+    instagram_shortcode,
+)
+from routers import media as media_router
 
 router = APIRouter(prefix="/posts", tags=["Posts"])
 
@@ -35,6 +46,12 @@ def _normalize_post_author(post: Post) -> None:
             status_code=422,
             detail="Select an author or provide temp_author_name",
         )
+
+
+def _normalize_display_source(post: Post) -> None:
+    post.display_source = (post.display_source or "external").strip().lower()
+    if post.display_source not in {"external", "r2"}:
+        raise HTTPException(status_code=422, detail="display_source must be 'external' or 'r2'")
 
 
 def _filter_admin_author(query, author_filter: str | None):
@@ -77,6 +94,10 @@ def _validate_reply_timing(reply_date: str | None, reply_utc: str | None, parent
 class PostReorder(SQLModel):
     target_post_id: int
     position: str
+
+
+class PostArchiveRequest(SQLModel):
+    destination: str = "primary"
 
 
 def _filter_post_platform(query, platform: str | None):
@@ -502,6 +523,136 @@ def get_admin_thread(
     ]
 
 
+def _stored_media_urls(post: Post) -> list[str]:
+    urls = []
+    if post.media_url:
+        urls.append(post.media_url)
+    try:
+        raw = json.loads(post.media_urls_json or "[]")
+        for item in raw:
+            url = item if isinstance(item, str) else item.get("url") if isinstance(item, dict) else None
+            if isinstance(url, str) and url:
+                urls.append(url)
+    except (TypeError, ValueError):
+        pass
+    return list(dict.fromkeys(urls))
+
+
+def _already_archived(post: Post) -> bool:
+    urls = _stored_media_urls(post)
+    if not urls:
+        return False
+    for url in urls:
+        try:
+            media_router._resolve_public_object(url)
+        except HTTPException:
+            return False
+    return True
+
+
+@router.post("/admin/{post_id}/archive", dependencies=[Depends(require_admin)])
+def archive_instagram_post(
+    post_id: int,
+    payload: PostArchiveRequest,
+    session: Session = Depends(get_session),
+):
+    """Persist an Instagram post's caption and media into the app's R2 storage."""
+    post = session.get(Post, post_id)
+    if not post or post.parent_id is not None:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.platform not in {"ig", "instagram"} or post.content_type != "post":
+        raise HTTPException(status_code=422, detail="Only Instagram posts and reels can be archived")
+    if not post.external_url:
+        raise HTTPException(status_code=422, detail="The post has no Instagram source URL")
+    if not post.posted_at:
+        raise HTTPException(status_code=422, detail="Set the post date before archiving")
+    if _already_archived(post):
+        raise HTTPException(status_code=409, detail="This post's media is already archived in R2")
+
+    author = session.get(Author, post.author_id) if post.author_id else None
+    author_name = post.temp_author_name or (author.name if author else None)
+    if not author_name:
+        raise HTTPException(status_code=422, detail="Set the post author before archiving")
+
+    shortcode = instagram_shortcode(post.external_url)
+    max_bytes = int(os.getenv("R2_MAX_UPLOAD_BYTES", str(media_router.DEFAULT_MAX_UPLOAD_BYTES)))
+    uploaded: list[dict[str, str | int]] = []
+    try:
+        with InstagramPostBrowser(archive_cookie()) as browser:
+            captured = browser.capture(post.external_url)
+            for index, source in enumerate(captured.media, start=1):
+                body, content_type = browser.download(source, max_bytes)
+                extension = extension_for_media(content_type)
+                filename = f"{author_name}-{post.posted_at}-ig-{shortcode}-{index:02d}{extension}"
+                uploaded.append(
+                    media_router.store_media_bytes(
+                        body,
+                        content_type=content_type,
+                        destination=payload.destination,
+                        author=author_name,
+                        posted_at=post.posted_at,
+                        media_type="ig",
+                        sequence=index,
+                        filename=filename,
+                    )
+                )
+
+        urls = [str(item["url"]) for item in uploaded]
+        post.caption = captured.caption if captured.caption is not None else post.caption
+        post.media_url = urls[0]
+        post.media_urls_json = json.dumps(
+            [
+                {
+                    "url": url,
+                    "text": None,
+                    "translation": None,
+                    "note": None,
+                    "attachment_type": None,
+                }
+                for url in urls
+            ]
+        )
+        post.display_source = "r2"
+        session.add(post)
+        session.commit()
+        session.refresh(post)
+    except InstagramArchiveRateLimitError as exc:
+        for item in uploaded:
+            try:
+                media_router.delete_media_key(str(item["bucket"]), str(item["key"]))
+            except Exception:
+                pass
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except InstagramArchiveSessionError as exc:
+        for item in uploaded:
+            try:
+                media_router.delete_media_key(str(item["bucket"]), str(item["key"]))
+            except Exception:
+                pass
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except InstagramArchiveError as exc:
+        for item in uploaded:
+            try:
+                media_router.delete_media_key(str(item["bucket"]), str(item["key"]))
+            except Exception:
+                pass
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception:
+        for item in uploaded:
+            try:
+                media_router.delete_media_key(str(item["bucket"]), str(item["key"]))
+            except Exception:
+                pass
+        raise
+
+    return {
+        "archived": True,
+        "caption": post.caption,
+        "media_urls": urls,
+        "post": _enrich(post, author),
+    }
+
+
 @router.get("/timeline")
 def get_timeline(
     platform: str | None = None,
@@ -617,6 +768,7 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
     _normalize_post_author(post)
+    _normalize_display_source(post)
     post.posted_at_utc = _normalize_utc_timestamp(post.posted_at_utc)
     if post.parent_id is not None:
         parent = session.get(Post, post.parent_id)
@@ -807,6 +959,7 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
             setattr(post, key, value)
 
     _normalize_post_author(post)
+    _normalize_display_source(post)
 
     session.add(post)
     session.commit()

@@ -71,6 +71,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added media_urls_json to post")
 
+        if "display_source" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN display_source VARCHAR DEFAULT 'external'"))
+            conn.execute(text("UPDATE post SET display_source = 'external' WHERE display_source IS NULL OR trim(display_source) = ''"))
+            conn.commit()
+            print("Migration: added display_source to post")
+
         if "caption_translation_note" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN caption_translation_note VARCHAR"))
             conn.commit()

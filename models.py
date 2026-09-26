@@ -93,6 +93,7 @@ class Post(SQLModel, table=True):
     media_url: Optional[str] = None
 
     media_urls_json: str = Field(default="[]")  # JSON array of media URLs for story carousels
+    display_source: str = Field(default="external")  # "external" embed or archived "r2" media
     is_visible: bool = Field(default=True)
     is_adult: bool = Field(default=False)
 

@@ -1,5 +1,6 @@
 import os
 import re
+from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -113,6 +114,85 @@ def _r2_client():
         aws_access_key_id=_required_env("R2_ACCESS_KEY_ID"),
         aws_secret_access_key=_required_env("R2_SECRET_ACCESS_KEY"),
     )
+
+
+def store_media_bytes(
+    data: bytes,
+    *,
+    content_type: str,
+    destination: str,
+    author: str,
+    posted_at: str,
+    media_type: str,
+    sequence: int,
+    filename: str,
+) -> dict[str, str | int]:
+    """Store validated in-memory media using the same naming rules as uploads."""
+    config = _destinations().get(destination)
+    if not config:
+        raise HTTPException(status_code=400, detail="Unknown upload destination")
+    bucket = (config.get("bucket") or "").strip()
+    public_url = (config.get("public_url") or "").strip().rstrip("/")
+    if not bucket or not public_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"R2 destination '{destination}' is not configured",
+        )
+    normalized_type = (content_type or "").lower()
+    if not normalized_type.startswith(ALLOWED_CONTENT_PREFIXES):
+        raise HTTPException(status_code=415, detail="Only image and video uploads are allowed")
+    max_bytes = int(os.getenv("R2_MAX_UPLOAD_BYTES", str(DEFAULT_MAX_UPLOAD_BYTES)))
+    if not data:
+        raise HTTPException(status_code=400, detail="The uploaded file is empty")
+    if len(data) > max_bytes:
+        max_mb = max_bytes // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"File exceeds the {max_mb} MB upload limit")
+
+    object_key = _object_key(
+        author,
+        posted_at,
+        media_type,
+        sequence,
+        filename,
+        filename,
+    )
+    client = _r2_client()
+    try:
+        try:
+            client.head_object(Bucket=bucket, Key=object_key)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in {"404", "NoSuchKey", "NotFound"}:
+                raise
+        else:
+            raise HTTPException(status_code=409, detail=f"A file named '{Path(object_key).name}' already exists")
+
+        client.upload_fileobj(
+            BytesIO(data),
+            bucket,
+            object_key,
+            ExtraArgs={
+                "ContentType": normalized_type,
+                "CacheControl": "public, max-age=31536000, immutable",
+            },
+        )
+    except HTTPException:
+        raise
+    except (BotoCoreError, ClientError) as exc:
+        raise HTTPException(status_code=502, detail="R2 upload failed") from exc
+
+    return {
+        "url": f"{public_url}/{quote(object_key, safe='/')}",
+        "key": object_key,
+        "bucket": bucket,
+        "destination": destination,
+        "size": len(data),
+        "content_type": normalized_type,
+    }
+
+
+def delete_media_key(bucket: str, object_key: str) -> None:
+    """Best-effort rollback helper for a newly uploaded archive object."""
+    _r2_client().delete_object(Bucket=bucket, Key=object_key)
 
 
 def _resolve_public_object(url: str) -> tuple[str, str, str]:

@@ -1,26 +1,75 @@
 import unittest
-from unittest.mock import patch
-from urllib.error import HTTPError
+
 from scripts import refresh_instagram_pfps as refresh
 
 
-class InstagramLookupTests(unittest.TestCase):
-    def test_rate_limit_stops_without_fallback(self):
-        with patch.object(refresh, 'request_bytes', side_effect=HTTPError('https://www.instagram.com/', 429, 'Too Many Requests', {}, None)) as request:
-            with self.assertRaisesRegex(refresh.InstagramRateLimitError, '429'):
-                refresh.fetch_profile_photo_url('example', 10, None)
-            self.assertEqual(request.call_count, 1)
+class InstagramRefreshTests(unittest.TestCase):
+    def test_normalizes_profile_url(self):
+        self.assertEqual(
+            refresh.normalize_instagram_username("https://www.instagram.com/jaoyng/?hl=en"),
+            "jaoyng",
+        )
 
-    def test_empty_user_has_clear_failure(self):
-        with patch.object(refresh, 'request_bytes', side_effect=[(b'{"data":{"user":null}}','application/json'), (b'<html>Login</html>', 'text/html')]):
-            with self.assertRaisesRegex(LookupError, 'no matching profile photo'):
-                refresh.fetch_profile_photo_url('example', 10, None)
+    def test_rejects_non_profile_and_unsafe_usernames(self):
+        self.assertIsNone(refresh.normalize_instagram_username("https://instagram.com/reel/abc"))
+        self.assertIsNone(refresh.normalize_instagram_username("../../tmp/avatar"))
+        self.assertIsNone(refresh.normalize_instagram_username("https://example.com/jaoyng"))
 
-    def test_matching_profile_is_returned(self):
-        with patch.object(refresh, 'request_bytes', return_value=(b'{"data":{"user":{"username":"example","profile_pic_url_hd":"https://example.com/photo.jpg"}}}', 'application/json')):
-            self.assertEqual(refresh.fetch_profile_photo_url('example', 10, None), 'https://example.com/photo.jpg')
+    def test_cookie_header_requires_no_manual_reassembly(self):
+        cookies = refresh.parse_cookie_header(
+            "csrftoken=abc; sessionid=user%3Atoken; rur=\"CCO\""
+        )
+        self.assertEqual([cookie["name"] for cookie in cookies], ["csrftoken", "sessionid", "rur"])
+        self.assertTrue(cookies[1]["httpOnly"])
 
-    def test_api_error_survives_fallback_failure(self):
-        with patch.object(refresh, 'request_bytes', side_effect=[HTTPError('https://www.instagram.com/', 401, 'Unauthorized', {}, None), (b'<html>Login</html>', 'text/html')]):
-            with self.assertRaisesRegex(LookupError, 'API HTTP 401: session rejected'):
-                refresh.fetch_profile_photo_url('example', 10, None)
+    def test_finds_photo_only_for_matching_json_user(self):
+        payload = {
+            "data": {
+                "user": {
+                    "username": "jaoyng",
+                    "profile_pic_url_hd": "https://cdn.example/jaoyng.jpg",
+                },
+                "suggested": {
+                    "username": "someone_else",
+                    "profile_pic_url_hd": "https://cdn.example/wrong.jpg",
+                },
+            }
+        }
+        self.assertEqual(
+            refresh.find_matching_profile_photo(payload, "JAOYNG"),
+            "https://cdn.example/jaoyng.jpg",
+        )
+        self.assertIsNone(refresh.find_matching_profile_photo(payload, "missing"))
+
+    def test_dom_candidate_must_name_requested_profile(self):
+        candidates = [
+            refresh.AvatarCandidate("https://cdn.example/me.jpg", "My profile picture", 320, 320),
+            refresh.AvatarCandidate("https://cdn.example/wrong.jpg", "Another user's profile picture", 640, 640),
+            refresh.AvatarCandidate("https://cdn.example/right.jpg", "jaoyng's profile picture", 150, 150),
+        ]
+        self.assertEqual(
+            refresh.choose_verified_avatar(candidates, "jaoyng"),
+            "https://cdn.example/right.jpg",
+        )
+
+    def test_dom_candidate_does_not_accept_username_substrings(self):
+        candidates = [
+            refresh.AvatarCandidate(
+                "https://cdn.example/wrong.jpg",
+                "notjaoyng's profile picture",
+                640,
+                640,
+            )
+        ]
+        self.assertIsNone(refresh.choose_verified_avatar(candidates, "jaoyng"))
+
+    def test_image_type_and_signature_must_agree(self):
+        self.assertEqual(refresh.image_extension("image/jpeg", b"\xff\xd8\xffmore"), ".jpg")
+        with self.assertRaisesRegex(refresh.InstagramLookupError, "invalid bytes"):
+            refresh.image_extension("image/jpeg", b"<html>login</html>")
+        with self.assertRaisesRegex(refresh.InstagramLookupError, "not an image"):
+            refresh.image_extension("text/html", b"<html></html>")
+
+
+if __name__ == "__main__":
+    unittest.main()

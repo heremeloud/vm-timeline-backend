@@ -1,83 +1,43 @@
 #!/usr/bin/env python3
-"""Refresh Instagram profile photos into local author uploads.
+"""Refresh Instagram author avatars through an authenticated browser.
 
-Run from vm-timeline-backend:
-    python3 scripts/refresh_instagram_pfps.py --dry-run
-    python3 scripts/refresh_instagram_pfps.py
-    python3 scripts/refresh_instagram_pfps.py --redownload-all
-    python3 scripts/refresh_instagram_pfps.py --author-id 10 --force
+Run from ``vm-timeline-backend``::
 
-Instagram now requires a logged-in session to look up profile photos - both the
-web_profile_info API and the profile page's embedded metadata return nothing useful
-to a logged-out request. Supply your own Instagram session by copying the "Cookie"
-request header from a logged-in browser tab (DevTools -> Network -> any
-instagram.com request -> Request Headers -> Cookie), then either:
+    python3 scripts/refresh_instagram_pfps.py --author-id 3 --force --dry-run
+    python3 scripts/refresh_instagram_pfps.py --author-id 3 --force
 
-    add IG_COOKIE="sessionid=...; csrftoken=...; ds_user_id=...; ..." to vm-timeline-backend/.env
-
-or export it / pass --cookie-file - see load_instagram_cookie() below for the lookup order.
+Set ``IG_COOKIE`` in ``.env`` to the complete Cookie request-header value copied
+from a logged-in Instagram browser request. The cookie is installed into a real
+browser context; it is never printed or written to another file.
 """
 
 from __future__ import annotations
 
 import argparse
-import html
-import json
 import os
 import re
 import sqlite3
-import ssl
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-from urllib.error import HTTPError, URLError
+from typing import Any, Iterable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
-import certifi
 from dotenv import load_dotenv
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_DIR = SCRIPT_DIR.parent
-os.chdir(BACKEND_DIR)
-load_dotenv(BACKEND_DIR / ".env")
-
-
 DB_PATH = BACKEND_DIR / "vm-social.db"
 UPLOAD_DIR = BACKEND_DIR / "uploads" / "authors"
 PUBLIC_PREFIX = "/static/authors"
-DEFAULT_TIMEOUT = 20
-SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_DELAY_SECONDS = 8.0
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-API_HEADERS_BASE = {
-    "User-Agent": (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-    ),
-    "Accept": "application/json",
-    "X-IG-App-ID": "936619743392459",
-    "X-ASBD-ID": "129477",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": "https://www.instagram.com/",
-}
-
-IMAGE_HEADERS = {
-    "User-Agent": HEADERS["User-Agent"],
-    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-    "Referer": "https://www.instagram.com/",
-}
+os.chdir(BACKEND_DIR)
+load_dotenv(BACKEND_DIR / ".env")
 
 
 @dataclass
@@ -88,48 +48,24 @@ class AuthorRow:
     ig_pfp_url: str | None
 
 
-def load_instagram_cookie(cookie_file: str | None) -> str | None:
-    """Load the user's own logged-in Instagram session (never auto-fetched)."""
-    if cookie_file:
-        return Path(cookie_file).expanduser().read_text(encoding="utf-8").strip() or None
-    return os.environ.get("IG_COOKIE", "").strip() or None
+@dataclass(frozen=True)
+class AvatarCandidate:
+    url: str
+    alt: str
+    width: int = 0
+    height: int = 0
 
 
-def csrf_token_from_cookie(cookie: str) -> str | None:
-    match = re.search(r"(?:^|;\s*)csrftoken=([^;]+)", cookie)
-    return match.group(1) if match else None
+class InstagramLookupError(RuntimeError):
+    """A profile could not be read safely."""
 
 
-def build_api_headers(cookie: str | None) -> dict[str, str]:
-    headers = dict(API_HEADERS_BASE)
-    if cookie:
-        headers["Cookie"] = cookie
-        csrf = csrf_token_from_cookie(cookie)
-        if csrf:
-            headers["X-CSRFToken"] = csrf
-    return headers
+class InstagramSessionError(InstagramLookupError):
+    """The supplied browser session is logged out or challenged."""
 
 
-def build_page_headers(cookie: str | None) -> dict[str, str]:
-    headers = dict(HEADERS)
-    if cookie:
-        headers["Cookie"] = cookie
-    return headers
-
-
-def request_bytes(url: str, headers: dict[str, str], timeout: int) -> tuple[bytes, str]:
-    req = Request(url, headers=headers)
-    with urlopen(req, timeout=timeout, context=SSL_CONTEXT) as response:
-        content_type = response.headers.get("Content-Type", "")
-        return response.read(), content_type
-
-
-def decode_jsonish_string(value: str) -> str:
-    value = html.unescape(value)
-    try:
-        return json.loads(f'"{value}"')
-    except json.JSONDecodeError:
-        return value.replace("\\/", "/")
+class InstagramRateLimitError(InstagramLookupError):
+    """Instagram asked the browser to slow down."""
 
 
 def normalize_instagram_username(instagram_url: str) -> str | None:
@@ -138,293 +74,449 @@ def normalize_instagram_username(instagram_url: str) -> str | None:
         return None
 
     if text.startswith("@"):
-        return text[1:].split("/")[0] or None
+        username = text[1:].split("/", 1)[0]
+    else:
+        if not re.match(r"^https?://", text, re.IGNORECASE):
+            text = f"https://instagram.com/{text.lstrip('/')}"
+        parsed = urlparse(text)
+        if parsed.hostname not in {"instagram.com", "www.instagram.com"}:
+            return None
+        parts = [part for part in parsed.path.split("/") if part]
+        if not parts:
+            return None
+        if parts[0].lower() in {"accounts", "explore", "p", "reel", "reels", "stories"}:
+            return None
+        username = parts[0]
 
-    if not re.match(r"^https?://", text):
-        text = f"https://instagram.com/{text.lstrip('/')}"
+    if not re.fullmatch(r"[A-Za-z0-9._]{1,30}", username):
+        return None
+    if username.startswith(".") or username.endswith(".") or ".." in username:
+        return None
+    return username
 
-    parsed = urlparse(text)
-    if "instagram.com" not in parsed.netloc.lower():
+
+def parse_cookie_header(cookie_header: str) -> list[dict[str, object]]:
+    """Convert an HTTP Cookie header into Playwright cookie dictionaries."""
+    cookies: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name or name.startswith("$") or name in seen:
+            continue
+        seen.add(name)
+        cookies.append(
+            {
+                "name": name,
+                "value": value,
+                "domain": ".instagram.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": name == "sessionid",
+                "sameSite": "Lax",
+            }
+        )
+    return cookies
+
+
+def load_cookie_header(cookie_file: str | None) -> str:
+    if cookie_file:
+        value = Path(cookie_file).expanduser().read_text(encoding="utf-8").strip()
+    else:
+        value = os.environ.get("IG_COOKIE", "").strip()
+    if not value:
+        raise InstagramSessionError(
+            "No Instagram cookie found. Set IG_COOKIE in .env or use --cookie-file."
+        )
+    names = {cookie["name"] for cookie in parse_cookie_header(value)}
+    if "sessionid" not in names:
+        raise InstagramSessionError("The Instagram cookie does not contain sessionid.")
+    return value
+
+
+def find_matching_profile_photo(payload: Any, username: str) -> str | None:
+    """Find an avatar only inside a JSON user object naming the expected user."""
+    expected = username.casefold()
+
+    def visit(value: Any) -> str | None:
+        if isinstance(value, dict):
+            actual = value.get("username")
+            if isinstance(actual, str) and actual.casefold() == expected:
+                for key in ("profile_pic_url_hd", "profile_pic_url", "profile_picture_url"):
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.startswith("https://"):
+                        return candidate
+            for child in value.values():
+                found = visit(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = visit(child)
+                if found:
+                    return found
         return None
 
-    parts = [part for part in parsed.path.split("/") if part]
-    if not parts:
-        return None
-
-    reserved = {"p", "reel", "reels", "stories", "explore", "accounts"}
-    if parts[0].lower() in reserved:
-        return None
-
-    return parts[0]
+    return visit(payload)
 
 
-def extract_profile_photo_url(page_html: str, username: str) -> str | None:
-    # The HTML fallback has no structured way to confirm whose page this is, and
-    # Instagram now often serves a generic/login-wall/"not found" shell instead of a
-    # real profile page to non-browser requests. Trusting *any* image found on such a
-    # page silently saves the wrong photo (this is what corrupted every author's PFP
-    # earlier). So: refuse to extract anything unless the page text actually names
-    # this username somewhere.
-    if not re.search(rf'"username"\s*:\s*"{re.escape(username)}"', page_html, re.IGNORECASE) \
-            and f"instagram.com/{username.lower()}" not in page_html.lower():
-        return None
-
-    patterns = [
-        r'"profile_pic_url_hd"\s*:\s*"([^"]+)"',
-        r'"profile_pic_url"\s*:\s*"([^"]+)"',
-        r'"profile_picture_url"\s*:\s*"([^"]+)"',
-        r'<meta\s+property=["\']og:image["\']\s+content=["\']([^"\']+)["\']',
-        r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:image["\']',
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, page_html)
-        if match:
-            return decode_jsonish_string(match.group(1))
-    return None
+def choose_verified_avatar(candidates: Iterable[AvatarCandidate], username: str) -> str | None:
+    """Accept only an image whose accessible label identifies this username."""
+    expected = username.casefold()
+    ranked: list[tuple[int, int, str]] = []
+    for candidate in candidates:
+        alt = " ".join(candidate.alt.casefold().split())
+        if not re.search(
+            rf"(?<![a-z0-9._]){re.escape(expected)}(?![a-z0-9._])",
+            alt,
+        ):
+            continue
+        if "profile picture" not in alt and "profile photo" not in alt:
+            continue
+        if not candidate.url.startswith("https://"):
+            continue
+        area = max(candidate.width, 0) * max(candidate.height, 0)
+        exact_prefix = int(alt.startswith(expected) or alt.startswith(f"{expected}'s"))
+        ranked.append((exact_prefix, area, candidate.url))
+    return max(ranked, default=None)[2] if ranked else None
 
 
-class InstagramRateLimitError(LookupError):
-    """Stop the batch when Instagram asks us to slow down."""
-
-
-def fetch_profile_photo_url(username: str, timeout: int, cookie: str | None) -> str | None:
-    api_url = f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}"
-    diagnostics = []
-    try:
-        body, _ = request_bytes(api_url, build_api_headers(cookie), timeout)
-        data = json.loads(body.decode("utf-8", errors="replace"))
-        payload = data.get("data") if isinstance(data, dict) else None
-        user = (payload.get("user") if isinstance(payload, dict) else None) or {}
-        if not isinstance(user, dict):
-            user = {}
-        # Guard against ever again saving a photo for the wrong account, in case the
-        # API misbehaves: only trust a result that actually says it's this username.
-        if (user.get("username") or "").lower() != username.lower():
-            user = {}
-        found = user.get("profile_pic_url_hd") or user.get("profile_pic_url")
-        if found:
-            return found
-        diagnostics.append("API returned no matching profile photo (session may be expired or challenged)")
-    except HTTPError as exc:
-        if exc.code == 429:
-            raise InstagramRateLimitError("API HTTP 429: rate limited; stop and retry later") from exc
-        reason = {401: "session rejected", 403: "access denied or session challenged", 429: "rate limited"}.get(exc.code, "request rejected")
-        diagnostics.append(f"API HTTP {exc.code}: {reason}")
-    except json.JSONDecodeError:
-        diagnostics.append("API returned non-JSON content (possibly a login page)")
-    except (URLError, TimeoutError, OSError) as exc:
-        diagnostics.append(f"API network error: {type(exc).__name__}")
-
-    profile_url = f"https://www.instagram.com/{username}/"
-    try:
-        body, _ = request_bytes(profile_url, build_page_headers(cookie), timeout)
-    except HTTPError as exc:
-        if exc.code == 429:
-            raise InstagramRateLimitError("Profile page HTTP 429: rate limited; stop and retry later") from exc
-        raise LookupError("; ".join(diagnostics + [f"profile page HTTP {exc.code}"])) from exc
-    photo = extract_profile_photo_url(body.decode("utf-8", errors="replace"), username)
-    if photo:
-        return photo
-    diagnostics.append("profile page contained no verified photo")
-    raise LookupError("; ".join(diagnostics))
-
-
-def extension_for(content_type: str, url: str) -> str:
-    content_type = content_type.split(";")[0].strip().lower()
-    by_type = {
+def image_extension(content_type: str, body: bytes) -> str:
+    media_type = content_type.partition(";")[0].strip().lower()
+    extensions = {
         "image/jpeg": ".jpg",
         "image/jpg": ".jpg",
         "image/png": ".png",
         "image/webp": ".webp",
         "image/gif": ".gif",
     }
-    if content_type in by_type:
-        return by_type[content_type]
+    if media_type not in extensions:
+        raise InstagramLookupError(
+            f"Avatar download returned {media_type or 'an unknown content type'}, not an image."
+        )
+    signatures = {
+        ".jpg": (b"\xff\xd8\xff",),
+        ".png": (b"\x89PNG\r\n\x1a\n",),
+        ".webp": (b"RIFF",),
+        ".gif": (b"GIF87a", b"GIF89a"),
+    }
+    extension = extensions[media_type]
+    if not any(body.startswith(signature) for signature in signatures[extension]):
+        raise InstagramLookupError("Avatar response claimed to be an image but had invalid bytes.")
+    if extension == ".webp" and body[8:12] != b"WEBP":
+        raise InstagramLookupError("Avatar response had an invalid WebP signature.")
+    return extension
 
-    suffix = Path(urlparse(url).path).suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
-        return ".jpg" if suffix == ".jpeg" else suffix
-    return ".jpg"
+
+class InstagramBrowser:
+    """Small Playwright adapter kept behind a context manager for clean shutdown."""
+
+    def __init__(
+        self,
+        cookie_header: str,
+        timeout_seconds: int,
+        browser_channel: str | None,
+        headful: bool,
+    ) -> None:
+        self.cookie_header = cookie_header
+        self.timeout_ms = timeout_seconds * 1000
+        self.browser_channel = browser_channel
+        self.headful = headful
+        self._playwright = None
+        self._browser = None
+        self.context = None
+
+    def __enter__(self) -> "InstagramBrowser":
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError(
+                "Playwright is not installed. Run: pip install -r requirements.txt"
+            ) from exc
+
+        self._playwright = sync_playwright().start()
+        launch_options: dict[str, object] = {"headless": not self.headful}
+        if self.browser_channel:
+            launch_options["channel"] = self.browser_channel
+        try:
+            self._browser = self._playwright.chromium.launch(**launch_options)
+        except Exception as exc:
+            self._playwright.stop()
+            hint = (
+                f"Could not launch browser channel {self.browser_channel!r}."
+                if self.browser_channel
+                else "Could not launch Playwright Chromium. Run: playwright install chromium"
+            )
+            raise RuntimeError(f"{hint} {exc}") from exc
+
+        self.context = self._browser.new_context(locale="en-US")
+        self.context.set_default_timeout(self.timeout_ms)
+        self.context.set_default_navigation_timeout(self.timeout_ms)
+        self.context.add_cookies(parse_cookie_header(self.cookie_header))
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if self.context is not None:
+            self.context.close()
+        if self._browser is not None:
+            self._browser.close()
+        if self._playwright is not None:
+            self._playwright.stop()
+
+    def find_avatar(self, username: str) -> str:
+        assert self.context is not None
+        page = self.context.new_page()
+        captured: list[str] = []
+
+        def inspect_response(response: Any) -> None:
+            try:
+                if response.status == 429:
+                    return
+                content_type = (response.headers.get("content-type") or "").lower()
+                if "json" not in content_type:
+                    return
+                found = find_matching_profile_photo(response.json(), username)
+                if found:
+                    captured.append(found)
+            except Exception:
+                return
+
+        page.on("response", inspect_response)
+        try:
+            response = page.goto(
+                f"https://www.instagram.com/{username}/",
+                wait_until="domcontentloaded",
+            )
+            if response is not None and response.status == 429:
+                raise InstagramRateLimitError("Instagram returned HTTP 429; stop and retry later.")
+
+            page.wait_for_timeout(2500)
+            current_url = page.url.lower()
+            if "/accounts/login" in current_url:
+                raise InstagramSessionError("Instagram redirected to login; refresh IG_COOKIE.")
+            if "/challenge" in current_url or "/checkpoint" in current_url:
+                raise InstagramSessionError("Instagram requires a browser security challenge.")
+
+            page_text = page.locator("body").inner_text(timeout=self.timeout_ms).casefold()
+            if "please wait a few minutes" in page_text or "try again later" in page_text:
+                raise InstagramRateLimitError("Instagram displayed a temporary rate-limit page.")
+
+            if captured:
+                return captured[0]
+
+            raw_candidates = page.locator("img[alt]").evaluate_all(
+                """images => images.map(image => ({
+                    url: image.currentSrc || image.src || '',
+                    alt: image.alt || '',
+                    width: image.naturalWidth || image.width || 0,
+                    height: image.naturalHeight || image.height || 0
+                }))"""
+            )
+            candidates = [
+                AvatarCandidate(
+                    url=str(item.get("url", "")),
+                    alt=str(item.get("alt", "")),
+                    width=int(item.get("width", 0) or 0),
+                    height=int(item.get("height", 0) or 0),
+                )
+                for item in raw_candidates
+                if isinstance(item, dict)
+            ]
+            found = choose_verified_avatar(candidates, username)
+            if found:
+                return found
+            raise InstagramLookupError(
+                "The authenticated page loaded, but no avatar explicitly identified this username."
+            )
+        except (InstagramLookupError, InstagramSessionError, InstagramRateLimitError):
+            raise
+        except Exception as exc:
+            raise InstagramLookupError(
+                f"Browser lookup failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+    def download_avatar(self, url: str) -> tuple[bytes, str]:
+        assert self.context is not None
+        try:
+            response = self.context.request.get(
+                url,
+                headers={"Referer": "https://www.instagram.com/"},
+                timeout=self.timeout_ms,
+            )
+        except Exception as exc:
+            raise InstagramLookupError(
+                f"Avatar download failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.status == 429:
+            raise InstagramRateLimitError("Instagram's image host returned HTTP 429.")
+        if not response.ok:
+            raise InstagramLookupError(f"Avatar download returned HTTP {response.status}.")
+        body = response.body()
+        if not body:
+            raise InstagramLookupError("Avatar download returned an empty response.")
+        if len(body) > MAX_IMAGE_BYTES:
+            raise InstagramLookupError("Avatar download exceeded the 10 MB safety limit.")
+        extension = image_extension(response.headers.get("content-type", ""), body)
+        return body, extension
 
 
 def should_refresh(author: AuthorRow, force: bool) -> bool:
     current = (author.ig_pfp_url or "").strip()
-    if force:
-        return True
-    if not current:
-        return True
-    if current.startswith(PUBLIC_PREFIX):
-        return False
-    return current.startswith("http://") or current.startswith("https://")
+    return force or not current or current.startswith(("http://", "https://"))
 
 
-def select_authors(conn: sqlite3.Connection, author_id: int | None, name: str | None) -> list[AuthorRow]:
+def select_authors(
+    conn: sqlite3.Connection, author_id: int | None, name: str | None
+) -> list[AuthorRow]:
     query = """
         SELECT id, name, instagram_url, ig_pfp_url
         FROM author
-        WHERE instagram_url IS NOT NULL
-          AND trim(instagram_url) != ''
+        WHERE instagram_url IS NOT NULL AND trim(instagram_url) != ''
     """
     params: list[object] = []
     if author_id is not None:
         query += " AND id = ?"
         params.append(author_id)
     query += " ORDER BY id"
-
-    rows = [
-        AuthorRow(
-            id=row["id"],
-            name=row["name"],
-            instagram_url=row["instagram_url"],
-            ig_pfp_url=row["ig_pfp_url"],
-        )
-        for row in conn.execute(query, params).fetchall()
-    ]
+    rows = [AuthorRow(*row) for row in conn.execute(query, params).fetchall()]
     if name:
-        needle = name.lower()
-        rows = [row for row in rows if needle in (row.name or "").lower()]
+        needle = name.casefold()
+        rows = [row for row in rows if needle in row.name.casefold()]
     return rows
 
 
-def refresh_author(
-    conn: sqlite3.Connection,
-    author: AuthorRow,
-    dry_run: bool,
-    force: bool,
-    timeout: int,
-    cookie: str | None,
-) -> tuple[bool, str]:
-    username = normalize_instagram_username(author.instagram_url or "")
-    if not username:
-        return False, "skip: invalid instagram_url"
-
-    if not should_refresh(author, force):
-        return False, f"skip: already local ({author.ig_pfp_url})"
-
-    profile_photo_url = fetch_profile_photo_url(username, timeout, cookie)
-    if not profile_photo_url:
-        return False, "failed: could not find profile photo URL in Instagram page"
-
-    if dry_run:
-        return True, f"dry-run: found {profile_photo_url}"
-
-    image_bytes, content_type = request_bytes(profile_photo_url, IMAGE_HEADERS, timeout)
-    if not content_type.lower().startswith("image/"):
-        return False, f"failed: profile URL did not return an image ({content_type or 'unknown content type'})"
-
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    ext = extension_for(content_type, profile_photo_url)
-    filename = f"ig-{author.id}{ext}"
-    path = UPLOAD_DIR / filename
-    path.write_bytes(image_bytes)
-
-    local_url = f"{PUBLIC_PREFIX}/{filename}"
-    conn.execute("UPDATE author SET ig_pfp_url = ? WHERE id = ?", (local_url, author.id))
-    author.ig_pfp_url = local_url
-    return True, f"updated: {local_url}"
+def limited(rows: Iterable[AuthorRow], limit: int | None) -> Iterable[AuthorRow]:
+    for index, row in enumerate(rows):
+        if limit is not None and index >= limit:
+            return
+        yield row
 
 
 def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be greater than 0")
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def nonnegative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
     return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Download current Instagram profile photos and save stable local author URLs."
+        description="Download verified Instagram profile photos through a logged-in browser."
     )
-    parser.add_argument("--dry-run", action="store_true", help="Fetch profile pages but do not download images or update the DB.")
+    parser.add_argument("--author-id", type=int, help="Refresh one author by database ID.")
+    parser.add_argument("--name", help="Refresh authors whose name contains this text.")
+    parser.add_argument("--limit", type=positive_int, help="Check at most this many authors.")
     parser.add_argument(
         "--force",
         "--redownload-all",
         dest="force",
         action="store_true",
-        help="Redownload every matching Instagram PFP, including authors that already have a local image.",
+        help="Replace an existing local avatar.",
     )
-    parser.add_argument("--author-id", type=int, help="Refresh one author by ID.")
-    parser.add_argument("--name", help="Refresh authors whose name contains this text.")
-    parser.add_argument("--limit", type=positive_int, help="Stop after checking this many matching authors.")
-    parser.add_argument("--timeout", type=positive_int, default=DEFAULT_TIMEOUT, help=f"HTTP timeout in seconds. Default: {DEFAULT_TIMEOUT}.")
+    parser.add_argument("--dry-run", action="store_true", help="Find the avatar without downloading or updating the database.")
+    parser.add_argument("--cookie-file", help="File containing a complete Instagram Cookie header; defaults to IG_COOKIE.")
+    parser.add_argument("--timeout", type=positive_int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--delay", type=nonnegative_float, default=DEFAULT_DELAY_SECONDS)
     parser.add_argument(
-        "--delay",
-        type=float,
-        default=2.0,
-        help="Seconds to wait between authors, to avoid Instagram rate-limiting your session. Default: 2.0.",
+        "--browser-channel",
+        default="",
+        help="Optional Playwright browser channel; bundled Chromium is used by default.",
     )
-    parser.add_argument(
-        "--cookie-file",
-        help="Path to a file containing your logged-in Instagram 'Cookie' header. "
-             "Falls back to the IG_COOKIE env var. Required now that Instagram blocks logged-out lookups.",
-    )
+    parser.add_argument("--headful", action="store_true", help="Show the automated browser for troubleshooting.")
     return parser
-
-
-def limited(rows: Iterable[AuthorRow], limit: int | None) -> Iterable[AuthorRow]:
-    if limit is None:
-        yield from rows
-        return
-    count = 0
-    for row in rows:
-        if count >= limit:
-            return
-        yield row
-        count += 1
 
 
 def main() -> int:
     args = build_parser().parse_args()
-
-    cookie = load_instagram_cookie(args.cookie_file)
-    if not cookie:
-        print(
-            "Warning: no Instagram session cookie found (IG_COOKIE env var or --cookie-file). "
-            "Instagram now requires a logged-in session for both photo lookup methods, "
-            "so every author will likely fail. See the script's module docstring for how to get one.",
-            file=sys.stderr,
-        )
-
-    checked = 0
-    changed = 0
-    failures = 0
+    try:
+        cookie_header = load_cookie_header(args.cookie_file)
+    except (OSError, InstagramSessionError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
     with sqlite3.connect(DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        authors = select_authors(conn, args.author_id, args.name)
-        rows = list(limited(authors, args.limit))
-        for index, author in enumerate(rows):
-            checked += 1
-            label = f"#{author.id} {author.name}"
-            try:
-                ok, message = refresh_author(conn, author, args.dry_run, args.force, args.timeout, cookie)
-            except InstagramRateLimitError as exc:
-                failures += 1
-                print(f"{label}: failed: {exc}")
-                print("Stopped early to avoid more rate-limited requests. Existing photos are unchanged for this author.")
-                break
-            except HTTPError as exc:
-                ok = False
-                message = f"failed: rate limited by Instagram (429) - wait a while or increase --delay" \
-                    if exc.code == 429 else f"failed: {exc}"
-            except (URLError, TimeoutError, OSError, LookupError) as exc:
-                ok = False
-                message = f"failed: {exc}"
+        authors = list(limited(select_authors(conn, args.author_id, args.name), args.limit))
+        if not authors:
+            print("No matching authors with Instagram URLs.")
+            return 0
 
-            if ok:
-                changed += 1
-            elif message.startswith("failed:"):
-                failures += 1
+        checked = refreshed = failures = 0
+        try:
+            with InstagramBrowser(
+                cookie_header=cookie_header,
+                timeout_seconds=args.timeout,
+                browser_channel=args.browser_channel or None,
+                headful=args.headful,
+            ) as instagram:
+                for index, author in enumerate(authors):
+                    label = f"#{author.id} {author.name}"
+                    if not should_refresh(author, args.force):
+                        print(f"{label}: skip: already local ({author.ig_pfp_url})")
+                        continue
 
-            print(f"{label}: {message}")
+                    checked += 1
+                    username = normalize_instagram_username(author.instagram_url or "")
+                    if not username:
+                        failures += 1
+                        print(f"{label}: failed: invalid Instagram URL")
+                        continue
 
-            if args.delay and index < len(rows) - 1:
-                time.sleep(args.delay)
+                    try:
+                        avatar_url = instagram.find_avatar(username)
+                        if args.dry_run:
+                            refreshed += 1
+                            print(f"{label}: dry-run: verified @{username} avatar")
+                        else:
+                            image, extension = instagram.download_avatar(avatar_url)
+                            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+                            filename = f"ig-{author.id}{extension}"
+                            destination = UPLOAD_DIR / filename
+                            temporary = destination.with_suffix(destination.suffix + ".tmp")
+                            temporary.write_bytes(image)
+                            temporary.replace(destination)
+                            local_url = f"{PUBLIC_PREFIX}/{filename}"
+                            conn.execute(
+                                "UPDATE author SET ig_pfp_url = ? WHERE id = ?",
+                                (local_url, author.id),
+                            )
+                            conn.commit()
+                            refreshed += 1
+                            print(f"{label}: updated: {local_url}")
+                    except (InstagramRateLimitError, InstagramSessionError) as exc:
+                        failures += 1
+                        print(f"{label}: failed: {exc}")
+                        print("Stopped to protect the Instagram session; no further profiles were requested.")
+                        break
+                    except InstagramLookupError as exc:
+                        failures += 1
+                        print(f"{label}: failed: {exc}")
 
-        if changed and not args.dry_run:
-            conn.commit()
+                    if args.delay and index < len(authors) - 1:
+                        time.sleep(args.delay)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
 
-    print(f"Done. checked={checked} refreshed={changed} failures={failures} dry_run={args.dry_run}")
+    print(
+        f"Done. checked={checked} refreshed={refreshed} "
+        f"failures={failures} dry_run={args.dry_run}"
+    )
     return 1 if failures else 0
 
 
