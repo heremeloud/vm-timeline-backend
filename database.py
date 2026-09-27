@@ -138,6 +138,16 @@ def run_migrations():
             conn.commit()
             print("Migration: added sort_order to post")
 
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_post_public_timeline "
+            "ON post (parent_id, is_visible, posted_at, sort_order, posted_at_utc, id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_post_related_scan "
+            "ON post (parent_id, is_visible, show_on_related_page)"
+        ))
+        conn.commit()
+
         # ── posttext table ──────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(posttext)"))
         posttext_cols = {row[1] for row in result}
@@ -501,6 +511,20 @@ def run_migrations():
             conn.execute(text("UPDATE eventview SET sort_order = id"))
             conn.commit()
             print("Migration: added sort_order to eventview")
+
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_event_public_filter "
+            "ON event (is_visible, category, subcategory, start_date, id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_event_public_dates "
+            "ON event (is_visible, start_date, end_date, id)"
+        ))
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_eventview_public_order "
+            "ON eventview (is_visible, sort_order, id)"
+        ))
+        conn.commit()
 
         # ── configurable event categories ───────────────────────
         category_count = conn.execute(text("SELECT COUNT(*) FROM eventcategoryoption")).scalar_one()

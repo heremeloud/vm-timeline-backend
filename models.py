@@ -1,4 +1,5 @@
 from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import Index
 from typing import Optional, List
 
 
@@ -68,6 +69,11 @@ class Author(SQLModel, table=True):
 # POST — Main IG/Twitter posts & tweet replies
 # ============================================================
 class Post(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_post_public_timeline", "parent_id", "is_visible", "posted_at", "sort_order", "posted_at_utc", "id"),
+        Index("ix_post_related_scan", "parent_id", "is_visible", "show_on_related_page"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
     platform: str  # "instagram", "x", "tt" etc.
@@ -305,6 +311,11 @@ class ProjectEpisode(SQLModel, table=True):
 
 # ---------- EVENT TABLE ----------
 class Event(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_event_public_filter", "is_visible", "category", "subcategory", "start_date", "id"),
+        Index("ix_event_public_dates", "is_visible", "start_date", "end_date", "id"),
+    )
+
     id: Optional[int] = Field(default=None, primary_key=True)
 
     name: str = Field(index=True)                  # required
@@ -346,6 +357,10 @@ class Event(SQLModel, table=True):
 # ---------- SAVED EVENT VIEW TABLE ----------
 class EventView(SQLModel, table=True):
     """Admin-defined public entry point for a filtered Events page."""
+
+    __table_args__ = (
+        Index("ix_eventview_public_order", "is_visible", "sort_order", "id"),
+    )
 
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str = Field(index=True)

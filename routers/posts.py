@@ -189,6 +189,50 @@ def _enrich_text(text: PostText, author: Author | None) -> dict:
     return obj
 
 
+def _hydrate_posts(session: Session, posts: list[Post]) -> list[dict]:
+    """Attach comments and public child posts in bulk to avoid per-card queries."""
+    post_ids = [post.id for post in posts if post.id is not None]
+    comments = session.exec(
+        select(PostText).where(PostText.post_id.in_(post_ids))
+    ).all() if post_ids else []
+    replies = session.exec(_order_replies(
+        select(Post)
+        .outerjoin(Author)
+        .where(
+            Post.parent_id.in_(post_ids),
+            Post.is_visible == True,
+            _has_public_author(),
+        )
+    )).all() if post_ids else []
+
+    author_ids = {
+        item.author_id
+        for item in [*posts, *comments, *replies]
+        if item.author_id is not None
+    }
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+
+    comments_by_post = defaultdict(list)
+    for comment in comments:
+        comments_by_post[comment.post_id].append(
+            _enrich_text(comment, authors_by_id.get(comment.author_id))
+        )
+    replies_by_post = defaultdict(list)
+    for reply in replies:
+        replies_by_post[reply.parent_id].append(
+            _enrich(reply, authors_by_id.get(reply.author_id))
+        )
+
+    hydrated = []
+    for post in posts:
+        obj = _enrich(post, authors_by_id.get(post.author_id))
+        obj["comments"] = comments_by_post[post.id]
+        obj["childrenPosts"] = replies_by_post[post.id]
+        hydrated.append(obj)
+    return hydrated
+
+
 @router.get("/admin")
 def get_admin_posts(
     platform: str | None = None,
@@ -679,55 +723,7 @@ def get_timeline(
     page_rows = session.exec(query.offset(offset).limit(limit + 1)).all()
     has_more = len(page_rows) > limit
     posts = page_rows[:limit]
-    post_ids = [post.id for post in posts if post.id is not None]
-
-    comments = []
-    replies = []
-    if post_ids:
-        comments = session.exec(
-            select(PostText).where(PostText.post_id.in_(post_ids))
-        ).all()
-        reply_query = (
-            select(Post)
-            .outerjoin(Author)
-            .where(
-                Post.parent_id.in_(post_ids),
-                Post.is_visible == True,
-                _has_public_author(),
-            )
-        )
-        replies = session.exec(_order_replies(reply_query)).all()
-
-    author_ids = {
-        item.author_id
-        for item in [*posts, *comments, *replies]
-        if item.author_id is not None
-    }
-    authors = (
-        session.exec(select(Author).where(Author.id.in_(author_ids))).all()
-        if author_ids
-        else []
-    )
-    authors_by_id = {author.id: author for author in authors}
-
-    comments_by_post = defaultdict(list)
-    for comment in comments:
-        comments_by_post[comment.post_id].append(
-            _enrich_text(comment, authors_by_id.get(comment.author_id))
-        )
-
-    replies_by_post = defaultdict(list)
-    for reply in replies:
-        replies_by_post[reply.parent_id].append(
-            _enrich(reply, authors_by_id.get(reply.author_id))
-        )
-
-    items = []
-    for post in posts:
-        obj = _enrich(post, authors_by_id.get(post.author_id))
-        obj["comments"] = comments_by_post[post.id]
-        obj["childrenPosts"] = replies_by_post[post.id]
-        items.append(obj)
+    items = _hydrate_posts(session, posts)
 
     newest_query = (
         select(Post)
@@ -792,10 +788,7 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
         )
     )
     posts = session.exec(_order_posts(query, "newest")).all()
-    author_ids = {post.author_id for post in posts if post.author_id is not None}
-    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
-    authors_by_id = {author.id: author for author in authors}
-    return [_enrich(post, authors_by_id.get(post.author_id)) for post in posts]
+    return _hydrate_posts(session, posts)
 
 
 @router.get("/{post_id}")
