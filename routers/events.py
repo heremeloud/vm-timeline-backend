@@ -7,7 +7,7 @@ from datetime import date
 
 from event_photos import EventPhoto, clean_photos, event_photos, set_event_photos
 from database import get_session
-from models import Event, Author, EventAuthorLink, Project, ProjectEpisode
+from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 
@@ -382,10 +382,20 @@ def _ensure_authors_exist(session: Session, author_ids: List[int]) -> List[Autho
 from pydantic import BaseModel
 
 
-VALID_CATEGORIES = set(EVENT_CATEGORIES)
-VALID_SUBCATEGORIES = {
-    category: set(values) for category, values in EVENT_SUBCATEGORIES.items()
-}
+def _valid_event_categories(session: Session):
+    categories = session.exec(select(EventCategoryOption)).all()
+    if not categories:
+        return set(EVENT_CATEGORIES), {
+            category: set(values) for category, values in EVENT_SUBCATEGORIES.items()
+        }
+    subcategories = session.exec(select(EventSubcategoryOption)).all()
+    category_by_id = {category.id: category.name for category in categories}
+    result = {category.name: set() for category in categories}
+    for subcategory in subcategories:
+        category_name = category_by_id.get(subcategory.category_id)
+        if category_name:
+            result[category_name].add(subcategory.name)
+    return set(result), result
 
 
 def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
@@ -459,8 +469,22 @@ class EventUpdate(BaseModel):
 # GET CATEGORIES
 # ----------------------------
 @router.get("/categories")
-def list_categories():
-    return {"categories": EVENT_CATEGORIES, "subcategories": EVENT_SUBCATEGORIES}
+def list_categories(session: Session = Depends(get_session)):
+    categories = session.exec(
+        select(EventCategoryOption).order_by(EventCategoryOption.sort_order, EventCategoryOption.id)
+    ).all()
+    if not categories:
+        return {"categories": EVENT_CATEGORIES, "subcategories": EVENT_SUBCATEGORIES}
+    subcategories = session.exec(
+        select(EventSubcategoryOption).order_by(EventSubcategoryOption.sort_order, EventSubcategoryOption.id)
+    ).all()
+    category_by_id = {category.id: category.name for category in categories}
+    result = {category.name: [] for category in categories}
+    for subcategory in subcategories:
+        category_name = category_by_id.get(subcategory.category_id)
+        if category_name:
+            result[category_name].append(subcategory.name)
+    return {"categories": [category.name for category in categories], "subcategories": result}
 
 
 @router.get("/tag-index")
@@ -693,10 +717,11 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
     authors = _ensure_authors_exist(session, payload.author_ids or [])
 
     category = (payload.category.strip().lower() if payload.category else None)
-    if category and category not in VALID_CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+    valid_categories, valid_subcategories = _valid_event_categories(session)
+    if category and category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(valid_categories))}")
     subcategory = payload.subcategory.strip().lower() if payload.subcategory else None
-    if subcategory and subcategory not in VALID_SUBCATEGORIES.get(category, set()):
+    if subcategory and subcategory not in valid_subcategories.get(category, set()):
         raise HTTPException(status_code=400, detail="Invalid subcategory for the selected category")
 
     start_date = (payload.start_date or payload.event_date or "").strip() or None
@@ -784,9 +809,10 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
         subcat = payload.subcategory.strip().lower() if _field_was_sent(payload, "subcategory") and payload.subcategory else (
             None if _field_was_sent(payload, "subcategory") or _field_was_sent(payload, "category") else ev.subcategory
         )
-        if cat and cat not in VALID_CATEGORIES:
-            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
-        if subcat and subcat not in VALID_SUBCATEGORIES.get(cat, set()):
+        valid_categories, valid_subcategories = _valid_event_categories(session)
+        if cat and cat not in valid_categories:
+            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(valid_categories))}")
+        if subcat and subcat not in valid_subcategories.get(cat, set()):
             raise HTTPException(status_code=400, detail="Invalid subcategory for the selected category")
         ev.category = cat
         ev.subcategory = subcat

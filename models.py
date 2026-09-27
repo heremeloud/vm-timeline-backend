@@ -85,6 +85,7 @@ class Post(SQLModel, table=True):
     show_translation_note: bool = Field(default=True)
     timeline_context: Optional[str] = None  # curator-authored context, not the author's caption
     show_timeline_context: bool = Field(default=True)
+    show_on_related_page: bool = Field(default=True)
 
     posted_at: Optional[str] = None
     posted_at_utc: Optional[str] = None  # exact ISO-8601 instant, normalized to UTC
@@ -340,6 +341,38 @@ class Event(SQLModel, table=True):
     )
 
     project: Optional["Project"] = Relationship(back_populates="events")
+
+
+# ---------- SAVED EVENT VIEW TABLE ----------
+class EventView(SQLModel, table=True):
+    """Admin-defined public entry point for a filtered Events page."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = Field(index=True)
+    slug: str = Field(index=True, unique=True)
+    is_visible: bool = Field(default=True)
+    name_filter: Optional[str] = None
+    category: Optional[str] = Field(default=None, index=True)
+    subcategory: Optional[str] = Field(default=None, index=True)
+    author: Optional[str] = Field(default=None, index=True)
+    event_sort: str = Field(default="newest")
+    view_mode: str = Field(default="list")
+    sort_order: int = Field(default=0, index=True)
+
+
+class EventCategoryOption(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    label: str
+    sort_order: int = Field(default=0, index=True)
+
+
+class EventSubcategoryOption(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    category_id: int = Field(foreign_key="eventcategoryoption.id", index=True)
+    name: str = Field(index=True)
+    label: str
+    sort_order: int = Field(default=0, index=True)
 
 
 class ProjectRelationshipChart(SQLModel, table=True):

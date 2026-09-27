@@ -7,7 +7,7 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
-from models import Post, PostText, Author
+from models import Post, PostText, Author, Event
 from middleware.auth import require_admin
 from instagram_archive import (
     InstagramArchiveError,
@@ -745,6 +745,57 @@ def get_timeline(
         "has_more": has_more,
         "last_updated": newest.posted_at if newest else None,
     }
+
+
+@router.get("/event/{event_id}")
+def get_event_post_candidates(event_id: int, session: Session = Depends(get_session)):
+    """Return public posts that mention one of an event's tags.
+
+    The client applies the shared event/date disambiguation logic so this list
+    matches the event links shown on timeline posts.
+    """
+    event = session.get(Event, event_id)
+    if not event or not event.is_visible:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    try:
+        raw_tags = json.loads(event.tags_json or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raw_tags = []
+    tags = {
+        str(tag).strip().lstrip("#")
+        for tag in raw_tags
+        if str(tag).strip().lstrip("#")
+    }
+    if not tags:
+        return []
+
+    conditions = []
+    for tag in tags:
+        pattern = f"%#{tag}%"
+        conditions.extend((
+            Post.caption.ilike(pattern),
+            Post.caption_translation.ilike(pattern),
+            Post.caption_translation_note.ilike(pattern),
+            Post.timeline_context.ilike(pattern),
+        ))
+
+    query = (
+        select(Post)
+        .outerjoin(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Post.show_on_related_page == True,
+            _has_public_author(),
+            or_(*conditions),
+        )
+    )
+    posts = session.exec(_order_posts(query, "newest")).all()
+    author_ids = {post.author_id for post in posts if post.author_id is not None}
+    authors = session.exec(select(Author).where(Author.id.in_(author_ids))).all() if author_ids else []
+    authors_by_id = {author.id: author for author in authors}
+    return [_enrich(post, authors_by_id.get(post.author_id)) for post in posts]
 
 
 @router.get("/{post_id}")

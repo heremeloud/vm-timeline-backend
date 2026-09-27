@@ -99,6 +99,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added show_timeline_context to post")
 
+        if "show_on_related_page" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN show_on_related_page BOOLEAN DEFAULT 1"))
+            conn.execute(text("UPDATE post SET show_on_related_page = 1 WHERE show_on_related_page IS NULL"))
+            conn.commit()
+            print("Migration: added show_on_related_page to post")
+
         if "posted_at_utc" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN posted_at_utc VARCHAR"))
             conn.commit()
@@ -485,6 +491,44 @@ def run_migrations():
             conn.execute(text("UPDATE topic SET is_visible = 1 WHERE is_visible IS NULL"))
             conn.commit()
             print("Migration: added is_visible to topic")
+
+        # ── saved event view table ──────────────────────────────
+        result = conn.execute(text("PRAGMA table_info(eventview)"))
+        event_view_cols = {row[1] for row in result}
+
+        if event_view_cols and "sort_order" not in event_view_cols:
+            conn.execute(text("ALTER TABLE eventview ADD COLUMN sort_order INTEGER DEFAULT 0"))
+            conn.execute(text("UPDATE eventview SET sort_order = id"))
+            conn.commit()
+            print("Migration: added sort_order to eventview")
+
+        # ── configurable event categories ───────────────────────
+        category_count = conn.execute(text("SELECT COUNT(*) FROM eventcategoryoption")).scalar_one()
+        if category_count == 0:
+            from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
+
+            def option_label(value):
+                return " ".join(part.upper() if part == "gmmtv" else part.capitalize() for part in value.split())
+
+            for category_order, category in enumerate(EVENT_CATEGORIES):
+                result = conn.execute(text(
+                    "INSERT INTO eventcategoryoption (name, label, sort_order) "
+                    "VALUES (:name, :label, :sort_order)"
+                ), {"name": category, "label": option_label(category), "sort_order": category_order})
+                category_id = result.lastrowid
+                for subcategory_order, subcategory in enumerate(EVENT_SUBCATEGORIES.get(category, [])):
+                    conn.execute(text(
+                        "INSERT INTO eventsubcategoryoption "
+                        "(category_id, name, label, sort_order) "
+                        "VALUES (:category_id, :name, :label, :sort_order)"
+                    ), {
+                        "category_id": category_id,
+                        "name": subcategory,
+                        "label": option_label(subcategory),
+                        "sort_order": subcategory_order,
+                    })
+            conn.commit()
+            print("Migration: seeded configurable event categories")
 
 def get_session():
     with Session(engine) as session:

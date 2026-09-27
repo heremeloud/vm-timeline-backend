@@ -3,17 +3,18 @@ from dotenv import load_dotenv
 load_dotenv()  
 from middleware import auth
 import os
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from sqlmodel import Session
 from fastapi.responses import RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from database import create_db_and_tables, run_migrations
+from database import create_db_and_tables, get_session, run_migrations
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES, PROJECT_CATEGORIES
 from middleware.rate_limit import RateLimiter
 
 # Routers
-from routers import posts, texts, authors, events, projects, topics, media
+from routers import posts, texts, authors, events, event_categories, event_views, projects, topics, media
 
 
 app = FastAPI(title="VM Social Timeline API")
@@ -53,16 +54,18 @@ def root():
 
 
 @app.get("/categories", tags=["Categories"])
-def list_categories():
+def list_categories(session: Session = Depends(get_session)):
     """Return every valid category name used by the API."""
+    configured_events = event_categories.category_config(session)
     return {
-        "events": [
-            {
-                "name": category,
-                "subcategories": EVENT_SUBCATEGORIES.get(category, []),
-            }
-            for category in EVENT_CATEGORIES
-        ],
+        "events": [{
+            "name": category["value"],
+            "label": category["label"],
+            "subcategories": [subcategory["value"] for subcategory in category["subcategories"]],
+        } for category in configured_events] or [{
+            "name": category,
+            "subcategories": EVENT_SUBCATEGORIES.get(category, []),
+        } for category in EVENT_CATEGORIES],
         "projects": PROJECT_CATEGORIES,
     }
 
@@ -75,6 +78,8 @@ app.include_router(posts.router)     # /posts/...
 app.include_router(texts.router)     # /texts/...
 app.include_router(authors.router)   # /authors/...
 app.include_router(events.router)    # /events/...
+app.include_router(event_categories.router)  # /event-categories/...
+app.include_router(event_views.router)  # /event-views/...
 app.include_router(projects.router)  # /projects/...
 app.include_router(topics.router)    # /topics/....
 app.include_router(media.router)     # /media/upload
