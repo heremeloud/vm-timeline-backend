@@ -329,6 +329,7 @@ class Event(SQLModel, table=True):
     photo_items_json: str = Field(default="[]")
     media_urls_json: str = Field(default="[]")
     dates_json: str = Field(default="[]")
+    date_items_json: str = Field(default="[]")
     media_url: Optional[str] = None                # one image url
     media_focal_x: Optional[float] = None          # 0-100, % from left
     media_focal_y: Optional[float] = None          # 0-100, % from top

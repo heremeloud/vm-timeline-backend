@@ -35,14 +35,36 @@ class EventCollectionsTests(unittest.TestCase):
         self.assertIsNone(saved['media_url'])
         self.assertEqual(len(list_events(visible_start='2026-09-15', visible_end='2026-09-16', session=self.session)), 1)
 
+    def test_date_specific_keyword_and_hashtag_roundtrip(self):
+        date_items = [
+            {"date": "2026-10-10", "keyword": "Second show", "hashtag": "#SecondShow"},
+            {"date": "2026-09-01", "keyword": "First show", "hashtag": "FirstShow"},
+        ]
+        saved = create_event(EventCreate(name="Two shows", date_items=date_items), self.session)
+        self.assertEqual(saved["dates"], ["2026-09-01", "2026-10-10"])
+        self.assertEqual(saved["date_items"], [
+            {"date": "2026-09-01", "keyword": "First show", "hashtag": "FirstShow"},
+            {"date": "2026-10-10", "keyword": "Second show", "hashtag": "SecondShow"},
+        ])
+        self.assertEqual(len(list_events(name="SecondShow", session=self.session)), 1)
+        self.assertEqual(len(list_events(keyword="First show", session=self.session)), 1)
+        self.assertEqual(len(list_events(tag="SecondShow", session=self.session)), 1)
+
+        saved = update_event(saved["id"], EventUpdate(date_items=[
+            {"date": "2026-11-02", "keyword": "Final show", "hashtag": "FinalShow"},
+        ]), self.session)
+        self.assertEqual(saved["dates"], ["2026-11-02"])
+        self.assertEqual(saved["date_items"][0]["keyword"], "Final show")
+
     def test_migration_preserves_legacy_event(self):
         from unittest.mock import patch
         from sqlalchemy import text
         import database
         with self.engine.begin() as conn:
-            conn.execute(text("INSERT INTO event (name, tags_json, is_visible, live_urls, live_media_items_json, announcement_urls_json, dates_json, media_urls_json, photo_items_json, media_url) VALUES ('Old', '[]', 1, '', '[]', '[]', '[]', '[]', '[]', 'old.jpg')"))
+            conn.execute(text("INSERT INTO event (name, tags_json, is_visible, live_urls, live_media_items_json, announcement_urls_json, dates_json, date_items_json, media_urls_json, photo_items_json, media_url) VALUES ('Old', '[]', 1, '', '[]', '[]', '[]', '[]', '[]', '[]', 'old.jpg')"))
             conn.execute(text("ALTER TABLE event DROP COLUMN photo_items_json"))
             conn.execute(text("ALTER TABLE event DROP COLUMN dates_json"))
+            conn.execute(text("ALTER TABLE event DROP COLUMN date_items_json"))
             conn.execute(text("ALTER TABLE event DROP COLUMN media_urls_json"))
         with patch.object(database, "engine", self.engine):
             database.run_migrations()
@@ -50,6 +72,7 @@ class EventCollectionsTests(unittest.TestCase):
         saved = list_events(session=self.session)[0]
         self.assertEqual(saved['media_urls'], ['old.jpg'])
         self.assertEqual(saved['dates'], [])
+        self.assertEqual(saved['date_items'], [])
 
     def test_legacy_and_invalid_date(self):
         legacy = Event(name='Legacy', media_url='https://example.com/old.jpg', start_date='2026-09-01')
