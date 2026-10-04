@@ -32,7 +32,7 @@ class Author(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     nickname: Optional[str] = None
     full_name: Optional[str] = None          # full legal/stage name
-    category: str = Field(default="artist")  # artist | crew | official | family_friend | fan
+    category: str = Field(default="artist")  # main | artist | crew | official | family_friend | fan
     profile_photo_url: Optional[str] = None
     ig_pfp_url: Optional[str] = None
     twitter_pfp_url: Optional[str] = None

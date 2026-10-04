@@ -5,6 +5,7 @@ from sqlmodel import SQLModel, Session, create_engine
 
 from models import Project, ProjectFilmingDay
 from routers.events import get_event_tag_index
+from routers.posts import invalidate_related_counts
 from routers.projects import (
     ProjectFilmingDayInput,
     ProjectFittingWorkshopInput,
@@ -15,6 +16,7 @@ from routers.projects import (
 
 class ProjectFittingWorkshopTests(unittest.TestCase):
     def setUp(self):
+        invalidate_related_counts()
         self.engine = create_engine("sqlite://")
         SQLModel.metadata.create_all(self.engine)
         self.session = Session(self.engine)

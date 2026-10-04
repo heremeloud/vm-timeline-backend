@@ -35,6 +35,16 @@ UPLOAD_DIR = "uploads"
 os.makedirs(os.path.join(UPLOAD_DIR, "authors"), exist_ok=True)
 app.mount("/static", StaticFiles(directory=UPLOAD_DIR), name="static")
 
+@app.middleware("http")
+async def clear_related_counts_after_writes(request, call_next):
+    """Any write may change which posts relate to which rows, so drop the cached related-post counts."""
+    response = await call_next(request)
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        from routers.posts import invalidate_related_counts
+        invalidate_related_counts()
+    return response
+
+
 @app.on_event("startup")
 def on_startup():
     if os.getenv("VERCEL") == "1":

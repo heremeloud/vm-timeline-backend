@@ -1,9 +1,10 @@
 import json
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import case, func, or_, true
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, SQLModel, select, desc
@@ -53,6 +54,23 @@ def _normalize_display_source(post: Post) -> None:
     post.display_source = (post.display_source or "external").strip().lower()
     if post.display_source not in {"external", "r2"}:
         raise HTTPException(status_code=422, detail="display_source must be 'external' or 'r2'")
+
+
+def _hide_author_categories(query, hidden: str | None):
+    """Drop posts by saved authors in the comma-separated categories.
+
+    The pseudo-category `temp` drops posts with a one-off local author (no saved author) instead.
+    """
+    categories = [item.strip() for item in (hidden or "").split(",") if item.strip()]
+    if not categories:
+        return query
+    saved = [item for item in categories if item != "temp"]
+    query = query.outerjoin(Author, Author.id == Post.author_id)
+    if "temp" in categories:
+        query = query.where(Post.author_id != None)
+    if saved:
+        query = query.where(or_(Post.author_id == None, Author.category.not_in(saved)))
+    return query
 
 
 def _filter_admin_author(query, author_filter: str | None):
@@ -162,9 +180,9 @@ def _normalize_project_entry_links(value) -> str:
     return json.dumps(ordered, sort_keys=True, separators=(",", ":"))
 
 
-def _post_project_entry_links(post: Post) -> set[tuple[int, str, int]]:
+def _links_from_json(links_json: str | None) -> set[tuple[int, str, int]]:
     try:
-        items = json.loads(post.project_entry_links_json or "[]")
+        items = json.loads(links_json or "[]")
     except (TypeError, ValueError):
         return set()
     return {
@@ -172,6 +190,10 @@ def _post_project_entry_links(post: Post) -> set[tuple[int, str, int]]:
         for item in items
         if isinstance(item, dict) and {"project_id", "entry_type", "entry_number"} <= item.keys()
     }
+
+
+def _post_project_entry_links(post: Post) -> set[tuple[int, str, int]]:
+    return _links_from_json(post.project_entry_links_json)
 
 
 def _project_entry_link_like(project_id: int, entry_type: str | None = None, entry_number: int | None = None) -> str:
@@ -193,14 +215,28 @@ def _project_entry_rows(session: Session, project_id: int) -> list[tuple[str, in
     return rows
 
 
+_HASHTAG_PATTERN = re.compile(r"#([\w]+)", flags=re.UNICODE)
+
+
+def _hashtags_in_text(*parts: str | None) -> set[str]:
+    """Casefolded hashtags (without #) found in any of the given texts."""
+    text = "\n".join(part for part in parts if part)
+    return {match.casefold() for match in _HASHTAG_PATTERN.findall(text)}
+
+
 def _hashtags_in_post(post: Post) -> set[str]:
-    text = "\n".join(filter(None, (
-        post.caption,
-        post.caption_translation,
-        post.caption_translation_note,
-        post.timeline_context,
-    )))
-    return {match.casefold() for match in re.findall(r"#([\w]+)", text, flags=re.UNICODE)}
+    return _hashtags_in_text(post.caption, post.caption_translation, post.caption_translation_note, post.timeline_context)
+
+
+# Related-post counts are cached per project (and per public/admin view). The cache lives in this process and is cleared by any
+# write request (see the middleware in main.py); on the read-only Vercel deployment data only changes with a deploy, which
+# starts fresh processes anyway. The TTL is a safety net for several workers.
+RELATED_COUNTS_TTL_SECONDS = 300
+_related_counts_cache: dict[tuple[int, bool], tuple[float, dict[str, int]]] = {}
+
+
+def invalidate_related_counts() -> None:
+    _related_counts_cache.clear()
 
 
 def _get_visible_project(session: Session, project_ref: str) -> Project:
@@ -353,6 +389,7 @@ def get_admin_posts(
     author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hide_author_categories: str | None = None,
     sort: str = "newest",
     offset: int = 0,
     limit: int = 100,
@@ -363,6 +400,7 @@ def get_admin_posts(
 
     query = _filter_post_platform(query, platform)
     query = _filter_admin_author(query, author_id)
+    query = _hide_author_categories(query, hide_author_categories)
     if date_from:
         query = query.where(Post.posted_at >= date_from.strip())
     if date_to:
@@ -383,12 +421,14 @@ def count_admin_posts(
     author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hide_author_categories: str | None = None,
     session: Session = Depends(get_session),
     _: bool = Depends(require_admin),
 ):
     query = select(func.count(Post.id)).where(Post.parent_id == None)
     query = _filter_post_platform(query, platform)
     query = _filter_admin_author(query, author_id)
+    query = _hide_author_categories(query, hide_author_categories)
     if date_from:
         query = query.where(Post.posted_at >= date_from.strip())
     if date_to:
@@ -403,6 +443,7 @@ def count_admin_post_search(
     author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hide_author_categories: str | None = None,
     include_text: bool = True,
     include_translations: bool = True,
     include_notes: bool = True,
@@ -433,6 +474,7 @@ def count_admin_post_search(
             post_query = post_query.where(Post.parent_id == None)
         post_query = _filter_post_platform(post_query, platform)
         post_query = _filter_admin_author(post_query, author_id)
+        post_query = _hide_author_categories(post_query, hide_author_categories)
         if date_from:
             post_query = post_query.where(Post.posted_at >= date_from.strip())
         if date_to:
@@ -448,12 +490,13 @@ def count_admin_post_search(
         text_conditions.append(PostText.note.ilike(pattern))
     if include_replies and text_conditions:
         text_query = select(func.count(PostText.id)).where(or_(*text_conditions))
-        if (platform and platform != "all") or author_id is not None or date_from or date_to:
+        if (platform and platform != "all") or author_id is not None or hide_author_categories or date_from or date_to:
             text_query = text_query.join(Post)
         if platform and platform != "all":
             text_query = _filter_post_platform(text_query, platform)
         if author_id is not None:
             text_query = _filter_admin_author(text_query, author_id)
+        text_query = _hide_author_categories(text_query, hide_author_categories)
         if date_from:
             text_query = text_query.where(func.coalesce(PostText.posted_at, Post.posted_at) >= date_from.strip())
         if date_to:
@@ -471,6 +514,7 @@ def search_admin_posts(
     author_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    hide_author_categories: str | None = None,
     include_text: bool = True,
     include_translations: bool = True,
     include_notes: bool = True,
@@ -514,7 +558,7 @@ def search_admin_posts(
         text_conditions.append(PostText.note.ilike(pattern))
     text_query = select(PostText).where(or_(*text_conditions)) if include_replies and text_conditions else None
 
-    if text_query is not None and ((platform and platform != "all") or author_id is not None or date_from or date_to):
+    if text_query is not None and ((platform and platform != "all") or author_id is not None or hide_author_categories or date_from or date_to):
         text_query = text_query.join(Post)
 
     if platform and platform != "all":
@@ -526,6 +570,10 @@ def search_admin_posts(
         post_query = _filter_admin_author(post_query, author_id)
         if text_query is not None:
             text_query = _filter_admin_author(text_query, author_id)
+
+    post_query = _hide_author_categories(post_query, hide_author_categories)
+    if text_query is not None:
+        text_query = _hide_author_categories(text_query, hide_author_categories)
 
     if date_from:
         start = date_from.strip()
@@ -971,52 +1019,93 @@ def get_project_post_candidates(
     return _hydrate_posts(session, posts)
 
 
+def _compute_related_counts(session: Session, project: Project, include_hidden: bool, authorization: str | None) -> dict[str, int]:
+    """One pass over the candidate posts, whatever the number of rows (no per-row rescans).
+
+    Posts are fetched with one query that selects only the columns needed, a post's hashtags are extracted once, and each
+    hashtag / explicit link is looked up in a dict to find the row(s) it counts for.
+    """
+    rows = _project_entry_rows(session, project.id)
+    rows_by_tag: dict[str, list[tuple[str, int]]] = defaultdict(list)
+    for entry_type, number, value in rows:
+        tag = str(value or "").strip().lstrip("#").casefold()
+        if tag:
+            rows_by_tag[tag].append((entry_type, number))
+
+    # Cheap candidate filter: a post can only count when it has some hashtag or links to this project at all.
+    link_like = _project_entry_link_like(project.id)
+    query = (
+        select(
+            Post.id, Post.caption, Post.caption_translation, Post.caption_translation_note,
+            Post.timeline_context, Post.project_entry_links_json,
+        )
+        .outerjoin(Author)
+        .where(
+            Post.parent_id == None,
+            _related_page_filter(include_hidden, authorization),
+            _has_public_author(),
+            or_(
+                Post.caption.like("%#%"),
+                Post.caption_translation.like("%#%"),
+                Post.caption_translation_note.like("%#%"),
+                Post.timeline_context.like("%#%"),
+                Post.project_entry_links_json.like(link_like),
+            ),
+        )
+    )
+
+    post_ids_by_row: dict[tuple[str, int], set[int]] = defaultdict(set)
+    for post_id, caption, translation, note, context, links_json in session.exec(query).all():
+        for tag in _hashtags_in_text(caption, translation, note, context):
+            for row in rows_by_tag.get(tag, ()):
+                post_ids_by_row[row].add(post_id)
+        if links_json and link_like.strip("%") in links_json:
+            for project_id, entry_type, number in _links_from_json(links_json):
+                if project_id == project.id:
+                    post_ids_by_row[(entry_type, number)].add(post_id)
+
+    counts: dict[str, int] = {}
+    for entry_type, number, value in rows:
+        total = len(post_ids_by_row.get((entry_type, number), ()))
+        counts[f"{entry_type}:{number}"] = total
+        tag = str(value or "").strip().lstrip("#")
+        if tag:
+            counts[tag] = total
+    return counts
+
+
 @router.get("/project/{project_ref}/related-counts")
 def get_project_related_post_counts(
     project_ref: str,
     session: Session = Depends(get_session),
     include_hidden: bool = False,
     authorization: str | None = Header(default=None),
+    response: Response = None,
 ):
     """Related-post counts per project row.
 
     Keys: every row hashtag, plus `<entry_type>:<number>` for every row (`filming:3`, `fitting:1`, …) so rows
     without a hashtag are counted too. A post counts once per row, by hashtag or by explicit link.
+
+    The public answer is cacheable by a CDN (`s-maxage`); the admin answer (`include_hidden`) is never shared.
     """
     project = _get_visible_project(session, project_ref)
-    rows = _project_entry_rows(session, project.id)
+    _related_page_filter(include_hidden, authorization)  # an `include_hidden` request needs a valid admin token, cached or not
 
-    tags_by_key = {
-        clean.casefold(): clean
-        for _type, _number, value in rows
-        if (clean := str(value or "").strip().lstrip("#"))
-    }
-    conditions = _hashtag_like_conditions(tags_by_key.values())
-    conditions.append(Post.project_entry_links_json.like(_project_entry_link_like(project.id)))
-    query = (
-        select(Post)
-        .outerjoin(Author)
-        .where(
-            Post.parent_id == None,
-            _related_page_filter(include_hidden, authorization),
-            _has_public_author(),
-            or_(*conditions),
+    if response is not None:
+        response.headers["Cache-Control"] = (
+            "private, no-store" if include_hidden
+            else f"public, max-age=0, s-maxage={RELATED_COUNTS_TTL_SECONDS}, stale-while-revalidate=60"
         )
-    )
-    posts = session.exec(query).all()
 
-    counts: dict[str, int] = {}
-    for entry_type, number, value in rows:
-        tag = str(value or "").strip().lstrip("#")
-        key = tag.casefold()
-        total = sum(
-            1 for post in posts
-            if (key and key in _hashtags_in_post(post)) or (project.id, entry_type, number) in _post_project_entry_links(post)
-        )
-        counts[f"{entry_type}:{number}"] = total
-        if tag:
-            counts[tag] = total
-    return counts
+    key = (project.id, include_hidden)
+    cached = _related_counts_cache.get(key)
+    if cached and time.monotonic() - cached[0] < RELATED_COUNTS_TTL_SECONDS:
+        return dict(cached[1])
+
+    counts = _compute_related_counts(session, project, include_hidden, authorization)
+    _related_counts_cache[key] = (time.monotonic(), counts)
+    return dict(counts)
 
 
 @router.get("/{post_id}")

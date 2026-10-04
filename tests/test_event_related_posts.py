@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from sqlalchemy import event as sa_event
 from sqlmodel import SQLModel, Session, create_engine
 
 from fastapi import HTTPException
@@ -12,12 +13,14 @@ from routers.posts import (
     get_event_post_candidates,
     get_project_post_candidates,
     get_project_related_post_counts,
+    invalidate_related_counts,
     update_post,
 )
 
 
 class EventRelatedPostTests(unittest.TestCase):
     def setUp(self):
+        invalidate_related_counts()  # every test has its own database, but the cache is per process
         self.engine = create_engine("sqlite://")
         SQLModel.metadata.create_all(self.engine)
         self.session = Session(self.engine)
@@ -270,6 +273,85 @@ class EventRelatedPostTests(unittest.TestCase):
         ), self.session)
 
         self.assertEqual(get_project_related_post_counts(project.id, self.session), {"fitting:1": 1, "GirlRulesF1": 1})
+
+
+    def count_queries(self, action):
+        statements = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+
+        sa_event.listen(self.engine, "before_cursor_execute", record)
+        try:
+            action()
+        finally:
+            sa_event.remove(self.engine, "before_cursor_execute", record)
+        return len(statements)
+
+    def make_project(self, rows: int, posts: int) -> Project:
+        project = Project(title="Girl Rules", slug="girl-rules", hashtag="GirlRules", category="series")
+        self.session.add(project)
+        self.session.commit()
+        self.session.refresh(project)
+        self.session.add_all(ProjectFilmingDay(project_id=project.id, q_number=n, hashtag=f"GirlRulesQ{n}") for n in range(1, rows + 1))
+        for n in range(posts):
+            self.session.add(Post(
+                platform="x", external_url=f"https://example.com/{n}", external_id=f"p{n}", temp_author_name="Fan",
+                caption=f"#GirlRulesQ{(n % rows) + 1} and #Other{n}", posted_at="2025-08-02",
+            ))
+        self.session.commit()
+        return project
+
+    def test_counting_takes_the_same_few_queries_however_many_rows_and_posts(self):
+        small = self.make_project(rows=2, posts=4)
+        small_queries = self.count_queries(lambda: get_project_related_post_counts(small.id, self.session))
+
+        invalidate_related_counts()
+        self.session.close()
+        self.engine.dispose()
+        self.engine = create_engine("sqlite://")
+        SQLModel.metadata.create_all(self.engine)
+        self.session = Session(self.engine)
+        big = self.make_project(rows=60, posts=300)
+        big_queries = self.count_queries(lambda: get_project_related_post_counts(big.id, self.session))
+
+        self.assertEqual(big_queries, small_queries)  # no query per row or per post
+        self.assertLessEqual(big_queries, 6)
+        counts = get_project_related_post_counts(big.id, self.session)
+        self.assertEqual(counts["filming:1"], 5)   # posts 0, 60, 120, 180, 240
+        self.assertEqual(counts["GirlRulesQ60"], 5)
+
+    def test_counts_are_cached_until_a_write_clears_them(self):
+        project = self.make_project(rows=2, posts=4)
+        first = get_project_related_post_counts(project.id, self.session)
+
+        # a second request runs no counting queries at all (a real request still looks the project up: one cheap query)
+        queries = self.count_queries(lambda: get_project_related_post_counts(project.id, self.session))
+        self.assertEqual(queries, 0)
+
+        self.session.add(Post(
+            platform="x", external_url="https://example.com/new", external_id="new", temp_author_name="Fan",
+            caption="#GirlRulesQ1", posted_at="2025-08-02",
+        ))
+        self.session.commit()
+        self.assertEqual(get_project_related_post_counts(project.id, self.session), first)  # still cached
+
+        invalidate_related_counts()  # what the middleware does after any write request
+        self.assertEqual(get_project_related_post_counts(project.id, self.session)["filming:1"], first["filming:1"] + 1)
+
+    def test_the_cached_public_counts_never_unlock_the_admin_counts(self):
+        project = self.make_project(rows=2, posts=4)
+        get_project_related_post_counts(project.id, self.session)  # fills the public cache
+
+        with self.assertRaises(HTTPException) as refused:
+            get_project_related_post_counts(project.id, self.session, include_hidden=True)
+        self.assertEqual(refused.exception.status_code, 403)
+
+    def test_a_cached_answer_cannot_be_changed_by_the_caller(self):
+        project = self.make_project(rows=2, posts=4)
+        get_project_related_post_counts(project.id, self.session)["filming:1"] = 999
+
+        self.assertNotEqual(get_project_related_post_counts(project.id, self.session)["filming:1"], 999)
 
 
 if __name__ == "__main__":
