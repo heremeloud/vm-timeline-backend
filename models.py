@@ -90,7 +90,7 @@ class Post(SQLModel, table=True):
     caption_translation_note: Optional[str] = None   # optional translator's note
     show_translation_note: bool = Field(default=True)
     timeline_context: Optional[str] = None  # curator-authored context, not the author's caption
-    show_timeline_context: bool = Field(default=True)
+    show_timeline_context: bool = Field(default=False)
     show_on_related_page: bool = Field(default=True)
 
     posted_at: Optional[str] = None
@@ -339,6 +339,9 @@ class Event(SQLModel, table=True):
     end_date: Optional[str] = Field(default=None, index=True)
     announcement_url: Optional[str] = None         # legacy single URL
     announcement_urls_json: str = Field(default="[]")
+    public_announcement_url: Optional[str] = None   # selected announcement shown on the public event card
+    interview_content: Optional[str] = None
+    show_interview_content: bool = Field(default=False)
     private_notes: Optional[str] = None
     live_urls: str = Field(default="")             # comma-separated live stream urls
     live_media_items_json: str = Field(default="[]")
@@ -381,6 +384,7 @@ class EventCategoryOption(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     label: str
     sort_order: int = Field(default=0, index=True)
+    is_default: bool = Field(default=False, index=True)
 
 
 class EventSubcategoryOption(SQLModel, table=True):

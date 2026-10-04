@@ -2,7 +2,7 @@ import unittest
 from fastapi import HTTPException
 from sqlmodel import SQLModel, Session, create_engine
 from models import Event
-from routers.events import EventCreate, EventUpdate, create_event, update_event, list_events, list_admin_events
+from routers.events import EventCreate, EventUpdate, create_event, update_event, list_events, list_admin_events, get_admin_event, get_event
 
 
 class EventCollectionsTests(unittest.TestCase):
@@ -56,16 +56,84 @@ class EventCollectionsTests(unittest.TestCase):
         self.assertEqual(saved["dates"], ["2026-11-02"])
         self.assertEqual(saved["date_items"][0]["keyword"], "Final show")
 
+    def test_live_media_display_type_roundtrip_and_validation(self):
+        from pydantic import ValidationError
+
+        media = [
+            {"url": "https://example.com/interview", "date": "2026-09-01", "display_type": "article"},
+            {"url": "https://x.com/example/status/123", "display_type": "tweet", "hashtag": "#Interview"},
+        ]
+        saved = create_event(EventCreate(name="Interview", live_media_items=media), self.session)
+        self.assertEqual(saved["live_media_items"], [
+            {"url": "https://example.com/interview", "date": "2026-09-01", "keyword": None, "hashtag": None, "display_type": "article"},
+            {"url": "https://x.com/example/status/123", "date": None, "keyword": None, "hashtag": "Interview", "display_type": "tweet"},
+        ])
+
+        legacy = create_event(EventCreate(
+            name="Legacy media",
+            live_media_items=[{"url": "https://example.com/video"}],
+        ), self.session)
+        self.assertEqual(legacy["live_media_items"][0]["display_type"], "auto")
+        self.assertIsNone(legacy["live_media_items"][0]["date"])
+
+        with self.assertRaises(ValidationError):
+            EventCreate(
+                name="Invalid media display",
+                live_media_items=[{"url": "https://example.com", "display_type": "iframe"}],
+            )
+
+    def test_public_announcement_is_exposed_without_private_announcement_list(self):
+        tweet_url = "https://x.com/example/status/123"
+        saved = create_event(EventCreate(
+            name="Interview announcement",
+            announcement_urls=[tweet_url, "https://example.com/private-reference"],
+            public_announcement_url=tweet_url,
+        ), self.session)
+        self.assertEqual(saved["public_announcement_url"], tweet_url)
+        self.assertNotIn("announcement_urls", saved)
+
+        public_event = list_events(session=self.session)[0]
+        self.assertEqual(public_event["public_announcement_url"], tweet_url)
+        self.assertNotIn("announcement_urls", public_event)
+
+        admin_event = get_admin_event(saved["id"], session=self.session)["event"]
+        self.assertEqual(admin_event["announcement_urls"], [tweet_url, "https://example.com/private-reference"])
+
+    def test_interview_content_is_private_until_enabled(self):
+        content = "Question one\n\nAnswer one"
+        saved = create_event(EventCreate(
+            name="Private interview",
+            category="show",
+            subcategory="interview",
+            interview_content=content,
+        ), self.session)
+        self.assertNotIn("interview_content", saved)
+        self.assertFalse(saved["show_interview_content"])
+
+        admin_event = get_admin_event(saved["id"], session=self.session)["event"]
+        self.assertEqual(admin_event["interview_content"], content)
+
+        update_event(saved["id"], EventUpdate(show_interview_content=True), self.session)
+        public_event = get_event(saved["id"], session=self.session)["event"]
+        self.assertEqual(public_event["interview_content"], content)
+        self.assertTrue(public_event["show_interview_content"])
+        self.assertNotIn("interview_content", list_events(session=self.session)[0])
+
     def test_migration_preserves_legacy_event(self):
         from unittest.mock import patch
         from sqlalchemy import text
         import database
         with self.engine.begin() as conn:
-            conn.execute(text("INSERT INTO event (name, tags_json, is_visible, live_urls, live_media_items_json, announcement_urls_json, dates_json, date_items_json, media_urls_json, photo_items_json, media_url) VALUES ('Old', '[]', 1, '', '[]', '[]', '[]', '[]', '[]', '[]', 'old.jpg')"))
+            conn.execute(text("INSERT INTO event (name, tags_json, is_visible, show_interview_content, live_urls, live_media_items_json, announcement_urls_json, dates_json, date_items_json, media_urls_json, photo_items_json, media_url) VALUES ('Old', '[]', 1, 0, '', '[]', '[]', '[]', '[]', '[]', '[]', 'old.jpg')"))
             conn.execute(text("ALTER TABLE event DROP COLUMN photo_items_json"))
             conn.execute(text("ALTER TABLE event DROP COLUMN dates_json"))
             conn.execute(text("ALTER TABLE event DROP COLUMN date_items_json"))
             conn.execute(text("ALTER TABLE event DROP COLUMN media_urls_json"))
+            conn.execute(text("ALTER TABLE event DROP COLUMN public_announcement_url"))
+            conn.execute(text("ALTER TABLE event DROP COLUMN interview_content"))
+            conn.execute(text("ALTER TABLE event DROP COLUMN show_interview_content"))
+            conn.execute(text("DROP INDEX ix_eventcategoryoption_is_default"))
+            conn.execute(text("ALTER TABLE eventcategoryoption DROP COLUMN is_default"))
         with patch.object(database, "engine", self.engine):
             database.run_migrations()
             database.run_migrations()
@@ -73,6 +141,14 @@ class EventCollectionsTests(unittest.TestCase):
         self.assertEqual(saved['media_urls'], ['old.jpg'])
         self.assertEqual(saved['dates'], [])
         self.assertEqual(saved['date_items'], [])
+        self.assertIsNone(saved['public_announcement_url'])
+        self.assertNotIn('interview_content', saved)
+        self.assertFalse(saved['show_interview_content'])
+        with self.engine.connect() as conn:
+            default_count = conn.execute(text(
+                "SELECT COUNT(*) FROM eventcategoryoption WHERE is_default = 1"
+            )).scalar_one()
+        self.assertEqual(default_count, 1)
 
     def test_legacy_and_invalid_date(self):
         legacy = Event(name='Legacy', media_url='https://example.com/old.jpg', start_date='2026-09-01')

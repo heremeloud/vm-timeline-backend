@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,7 +8,7 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
-from models import Post, PostText, Author, Event
+from models import Post, PostText, Author, Event, Project, ProjectFilmingDay, ProjectEpisode
 from middleware.auth import require_admin
 from instagram_archive import (
     InstagramArchiveError,
@@ -748,7 +749,8 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
     """Return public posts that mention one of an event's tags.
 
     The client applies the shared event/date disambiguation logic so this list
-    matches the event links shown on timeline posts.
+    matches the event links shown on timeline posts. A post also matches when its
+    "Related Event / Project" text contains the event's keyword.
     """
     event = session.get(Event, event_id)
     if not event or not event.is_visible:
@@ -763,7 +765,8 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
         for tag in raw_tags
         if str(tag).strip().lstrip("#")
     }
-    if not tags:
+    keyword = (event.keyword or "").strip()
+    if not tags and not keyword:
         return []
 
     conditions = []
@@ -775,6 +778,9 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
             Post.caption_translation_note.ilike(pattern),
             Post.timeline_context.ilike(pattern),
         ))
+    if keyword:
+        # An event keyword typed into "Related Event / Project" links the post to the event.
+        conditions.append(Post.timeline_context.ilike(f"%{keyword}%"))
 
     query = (
         select(Post)
@@ -789,6 +795,134 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
     )
     posts = session.exec(_order_posts(query, "newest")).all()
     return _hydrate_posts(session, posts)
+
+
+@router.get("/project/{project_ref}/related")
+def get_project_post_candidates(project_ref: str, hashtag: str, session: Session = Depends(get_session)):
+    """Return public posts for a project, filming-day, or episode hashtag."""
+    clean_project_ref = str(project_ref).strip()
+    project = session.get(Project, int(clean_project_ref)) if clean_project_ref.isdigit() else session.exec(
+        select(Project).where(Project.slug == clean_project_ref.lower())
+    ).first()
+    if not project or not project.is_visible:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_id = project.id
+
+    filming_days = session.exec(
+        select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)
+    ).all()
+    episodes = session.exec(
+        select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)
+    ).all()
+    allowed_tags = {
+        str(value).strip().lstrip("#").casefold()
+        for value in [project.hashtag, *[row.hashtag for row in filming_days], *[row.hashtag for row in episodes]]
+        if str(value or "").strip().lstrip("#")
+    }
+    clean_hashtag = hashtag.strip().lstrip("#")
+    if not clean_hashtag or clean_hashtag.casefold() not in allowed_tags:
+        raise HTTPException(status_code=404, detail="Project hashtag not found")
+
+    pattern = f"%#{clean_hashtag}%"
+    query = (
+        select(Post)
+        .outerjoin(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Post.show_on_related_page == True,
+            _has_public_author(),
+            or_(
+                Post.caption.ilike(pattern),
+                Post.caption_translation.ilike(pattern),
+                Post.caption_translation_note.ilike(pattern),
+                Post.timeline_context.ilike(pattern),
+            ),
+        )
+    )
+    posts = session.exec(_order_posts(query, "newest")).all()
+    normalized_hashtag = clean_hashtag.casefold()
+    posts = [
+        post for post in posts
+        if normalized_hashtag in {
+            match.casefold()
+            for match in re.findall(
+                r"#([\w]+)",
+                "\n".join(filter(None, (
+                    post.caption,
+                    post.caption_translation,
+                    post.caption_translation_note,
+                    post.timeline_context,
+                ))),
+                flags=re.UNICODE,
+            )
+        }
+    ]
+    return _hydrate_posts(session, posts)
+
+
+@router.get("/project/{project_ref}/related-counts")
+def get_project_related_post_counts(project_ref: str, session: Session = Depends(get_session)):
+    """Return related-post counts for every filming-day and episode hashtag."""
+    clean_project_ref = str(project_ref).strip()
+    project = session.get(Project, int(clean_project_ref)) if clean_project_ref.isdigit() else session.exec(
+        select(Project).where(Project.slug == clean_project_ref.lower())
+    ).first()
+    if not project or not project.is_visible:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    filming_days = session.exec(
+        select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project.id)
+    ).all()
+    episodes = session.exec(
+        select(ProjectEpisode).where(ProjectEpisode.project_id == project.id)
+    ).all()
+    tags_by_key = {
+        clean.casefold(): clean
+        for value in [*[row.hashtag for row in filming_days], *[row.hashtag for row in episodes]]
+        if (clean := str(value or "").strip().lstrip("#"))
+    }
+    if not tags_by_key:
+        return {}
+
+    conditions = []
+    for tag in tags_by_key.values():
+        pattern = f"%#{tag}%"
+        conditions.extend((
+            Post.caption.ilike(pattern),
+            Post.caption_translation.ilike(pattern),
+            Post.caption_translation_note.ilike(pattern),
+            Post.timeline_context.ilike(pattern),
+        ))
+    query = (
+        select(Post)
+        .outerjoin(Author)
+        .where(
+            Post.parent_id == None,
+            Post.is_visible == True,
+            Post.show_on_related_page == True,
+            _has_public_author(),
+            or_(*conditions),
+        )
+    )
+    counts = {tag: 0 for tag in tags_by_key.values()}
+    for post in session.exec(query).all():
+        post_tags = {
+            match.casefold()
+            for match in re.findall(
+                r"#([\w]+)",
+                "\n".join(filter(None, (
+                    post.caption,
+                    post.caption_translation,
+                    post.caption_translation_note,
+                    post.timeline_context,
+                ))),
+                flags=re.UNICODE,
+            )
+        }
+        for key in post_tags & tags_by_key.keys():
+            counts[tags_by_key[key]] += 1
+    return counts
 
 
 @router.get("/{post_id}")

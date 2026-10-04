@@ -94,10 +94,13 @@ def run_migrations():
             print("Migration: added timeline_context to post")
 
         if "show_timeline_context" not in post_cols:
-            conn.execute(text("ALTER TABLE post ADD COLUMN show_timeline_context BOOLEAN DEFAULT 1"))
-            conn.execute(text("UPDATE post SET show_timeline_context = 1 WHERE show_timeline_context IS NULL"))
+            conn.execute(text("ALTER TABLE post ADD COLUMN show_timeline_context BOOLEAN DEFAULT 0"))
             conn.commit()
             print("Migration: added show_timeline_context to post")
+
+        # Legacy posts may predate this preference. Treat an absent choice as hidden.
+        conn.execute(text("UPDATE post SET show_timeline_context = 0 WHERE show_timeline_context IS NULL"))
+        conn.commit()
 
         if "show_on_related_page" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN show_on_related_page BOOLEAN DEFAULT 1"))
@@ -264,6 +267,22 @@ def run_migrations():
                 )
             conn.commit()
             print("Migration: added announcement_urls_json to event")
+
+        if "public_announcement_url" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN public_announcement_url VARCHAR"))
+            conn.commit()
+            print("Migration: added public_announcement_url to event")
+
+        if "interview_content" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN interview_content VARCHAR"))
+            conn.commit()
+            print("Migration: added interview_content to event")
+
+        if "show_interview_content" not in event_cols:
+            conn.execute(text("ALTER TABLE event ADD COLUMN show_interview_content BOOLEAN DEFAULT 0"))
+            conn.execute(text("UPDATE event SET show_interview_content = 0 WHERE show_interview_content IS NULL"))
+            conn.commit()
+            print("Migration: added show_interview_content to event")
 
         if "live_media_items_json" not in event_cols:
             conn.execute(text("ALTER TABLE event ADD COLUMN live_media_items_json VARCHAR DEFAULT '[]'"))
@@ -527,6 +546,13 @@ def run_migrations():
         conn.commit()
 
         # ── configurable event categories ───────────────────────
+        result = conn.execute(text("PRAGMA table_info(eventcategoryoption)"))
+        event_category_cols = {row[1] for row in result}
+        if event_category_cols and "is_default" not in event_category_cols:
+            conn.execute(text("ALTER TABLE eventcategoryoption ADD COLUMN is_default BOOLEAN DEFAULT 0"))
+            conn.commit()
+            print("Migration: added is_default to eventcategoryoption")
+
         category_count = conn.execute(text("SELECT COUNT(*) FROM eventcategoryoption")).scalar_one()
         if category_count == 0:
             from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
@@ -536,9 +562,14 @@ def run_migrations():
 
             for category_order, category in enumerate(EVENT_CATEGORIES):
                 result = conn.execute(text(
-                    "INSERT INTO eventcategoryoption (name, label, sort_order) "
-                    "VALUES (:name, :label, :sort_order)"
-                ), {"name": category, "label": option_label(category), "sort_order": category_order})
+                    "INSERT INTO eventcategoryoption (name, label, sort_order, is_default) "
+                    "VALUES (:name, :label, :sort_order, :is_default)"
+                ), {
+                    "name": category,
+                    "label": option_label(category),
+                    "sort_order": category_order,
+                    "is_default": category_order == 0,
+                })
                 category_id = result.lastrowid
                 for subcategory_order, subcategory in enumerate(EVENT_SUBCATEGORIES.get(category, [])):
                     conn.execute(text(
@@ -553,6 +584,22 @@ def run_migrations():
                     })
             conn.commit()
             print("Migration: seeded configurable event categories")
+
+        default_category_count = conn.execute(text(
+            "SELECT COUNT(*) FROM eventcategoryoption WHERE is_default = 1"
+        )).scalar_one()
+        if default_category_count == 0:
+            conn.execute(text(
+                "UPDATE eventcategoryoption SET is_default = 1 "
+                "WHERE id = (SELECT id FROM eventcategoryoption ORDER BY sort_order, id LIMIT 1)"
+            ))
+            conn.commit()
+            print("Migration: selected the first event category as the default")
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_eventcategoryoption_is_default "
+            "ON eventcategoryoption (is_default)"
+        ))
+        conn.commit()
 
 def get_session():
     with Session(engine) as session:

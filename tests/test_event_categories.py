@@ -32,6 +32,8 @@ class EventCategoryTests(unittest.TestCase):
     def test_create_order_and_rename_cascade(self):
         first = create_category(CategoryCreate(name="Fan Event"), self.session)
         second = create_category(CategoryCreate(name="Show"), self.session)
+        self.assertTrue(first.is_default)
+        self.assertFalse(second.is_default)
         subcategory = create_subcategory(
             SubcategoryCreate(category_id=first.id, name="Fan Meet"), self.session
         )
@@ -50,6 +52,10 @@ class EventCategoryTests(unittest.TestCase):
 
         update_category(second.id, CategoryUpdate(sort_order=-1), self.session)
         self.assertEqual([item["value"] for item in category_config(self.session)], ["show", "fan gathering"])
+
+        update_category(second.id, CategoryUpdate(is_default=True), self.session)
+        config = category_config(self.session)
+        self.assertEqual([item["value"] for item in config if item["is_default"]], ["show"])
 
     def test_in_use_options_cannot_be_deleted(self):
         category = create_category(CategoryCreate(name="Live"), self.session)
@@ -72,6 +78,13 @@ class EventCategoryTests(unittest.TestCase):
         delete_subcategory(subcategory.id, self.session)
         delete_category(category.id, self.session)
         self.assertEqual([item["value"] for item in category_config(self.session)], ["keep"])
+
+    def test_deleting_the_default_selects_a_replacement(self):
+        first = create_category(CategoryCreate(name="First"), self.session)
+        create_category(CategoryCreate(name="Second"), self.session)
+        delete_category(first.id, self.session)
+        config = category_config(self.session)
+        self.assertEqual([item["value"] for item in config if item["is_default"]], ["second"])
 
 
 if __name__ == "__main__":

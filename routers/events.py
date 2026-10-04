@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select, desc
 from sqlalchemy import func, or_, and_
-from typing import Optional, List, Any, Dict
+from typing import Optional, List, Any, Dict, Literal
 import json
 from datetime import date
 
 from event_photos import EventPhoto, clean_photos, event_photos, set_event_photos
 from database import get_session
-from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode
+from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode, ProjectFilmingDay
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 
@@ -174,7 +174,11 @@ def _clean_live_media_items(items) -> List[Dict[str, Optional[str]]]:
             continue
         hashtag = str(raw.get("hashtag") or "").strip().lstrip("#") or None
         keyword = str(raw.get("keyword") or "").strip() or None
-        clean.append({"url": url, "keyword": keyword, "hashtag": hashtag})
+        date = str(raw.get("date") or "").strip() or None
+        display_type = str(raw.get("display_type") or "auto").strip().lower()
+        if display_type not in {"auto", "article", "tweet", "youtube"}:
+            display_type = "auto"
+        clean.append({"url": url, "date": date, "keyword": keyword, "hashtag": hashtag, "display_type": display_type})
     return clean
 
 
@@ -186,7 +190,7 @@ def _parse_live_media_items(ev: Event) -> List[Dict[str, Optional[str]]]:
     if parsed:
         return parsed
     return [
-        {"url": url.strip(), "keyword": None, "hashtag": None}
+        {"url": url.strip(), "date": None, "keyword": None, "hashtag": None, "display_type": "auto"}
         for url in (ev.live_urls or "").split(",")
         if url.strip()
     ]
@@ -226,6 +230,9 @@ def _serialize_event(session: Session, ev: Event, include_private: bool = False)
     obj["live_media_items"] = live_media_items
     obj["live_urls"] = [item["url"] for item in live_media_items]
     obj.pop("live_media_items_json", None)
+    obj["public_announcement_url"] = getattr(ev, "public_announcement_url", None)
+    if not include_private and not getattr(ev, "show_interview_content", False):
+        obj.pop("interview_content", None)
 
     # Private reference fields are only returned from authenticated admin routes.
     obj.pop("announcement_url", None)
@@ -349,6 +356,8 @@ def _serialize_event_list(session: Session, events: List[Event], include_private
         obj["live_media_items"] = live_media_items
         obj["live_urls"] = [item["url"] for item in live_media_items]
         obj.pop("live_media_items_json", None)
+        obj["public_announcement_url"] = getattr(ev, "public_announcement_url", None)
+        obj.pop("interview_content", None)
         obj.pop("announcement_url", None)
         obj.pop("announcement_urls_json", None)
         obj.pop("private_notes", None)
@@ -446,8 +455,10 @@ def _field_was_sent(payload: BaseModel, field_name: str) -> bool:
 
 class LiveMediaItem(BaseModel):
     url: str
+    date: Optional[str] = None
     keyword: Optional[str] = None
     hashtag: Optional[str] = None
+    display_type: Literal["auto", "article", "tweet", "youtube"] = "auto"
 
 
 class EventDateItem(BaseModel):
@@ -475,6 +486,9 @@ class EventCreate(BaseModel):
     start_date: Optional[str] = None  # YYYY-MM-DD
     end_date: Optional[str] = None  # YYYY-MM-DD
     announcement_urls: Optional[List[str]] = None
+    public_announcement_url: Optional[str] = None
+    interview_content: Optional[str] = None
+    show_interview_content: bool = False
     private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
     live_media_items: Optional[List[LiveMediaItem]] = None
@@ -503,6 +517,9 @@ class EventUpdate(BaseModel):
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     announcement_urls: Optional[List[str]] = None
+    public_announcement_url: Optional[str] = None
+    interview_content: Optional[str] = None
+    show_interview_content: Optional[bool] = None
     private_notes: Optional[str] = None
     live_urls: Optional[List[str]] = None
     live_media_items: Optional[List[LiveMediaItem]] = None
@@ -556,12 +573,21 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         )
         .order_by(ProjectEpisode.project_id, ProjectEpisode.episode_number, ProjectEpisode.id)
     ).all() if visible_project_ids else []
+    filming_days = session.exec(
+        select(ProjectFilmingDay)
+        .where(
+            ProjectFilmingDay.project_id.in_(visible_project_ids),
+            ProjectFilmingDay.hashtag != None,
+        )
+        .order_by(ProjectFilmingDay.project_id, ProjectFilmingDay.q_number, ProjectFilmingDay.id)
+    ).all() if visible_project_ids else []
     projects_by_id = {project.id: project for project in projects}
     event_entries = [
         {
             "id": event.id,
             "name": event.name,
             "tags": _safe_parse_tags(event.tags_json),
+            "keyword": (event.keyword or "").strip() or None,
             "category": event.category,
             "subcategory": event.subcategory,
             "start_date": event.start_date or event.event_date,
@@ -603,7 +629,24 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         for episode in episodes
         if episode.hashtag and episode.hashtag.strip()
     ]
-    return event_entries + project_entries + episode_entries
+    filming_day_entries = [
+        {
+            "id": f"project-{day.project_id}-filming-{day.id}",
+            "name": f"{projects_by_id[day.project_id].title} Q{day.q_number}",
+            "tags": [day.hashtag],
+            "category": "project filming day",
+            "subcategory": None,
+            "start_date": day.filming_date or projects_by_id[day.project_id].start_date,
+            "end_date": day.filming_date or projects_by_id[day.project_id].end_date,
+            "project_id": day.project_id,
+            "q_number": day.q_number,
+            "is_project": True,
+            "is_filming_day": True,
+        }
+        for day in filming_days
+        if day.hashtag and day.hashtag.strip()
+    ]
+    return event_entries + project_entries + episode_entries + filming_day_entries
 
 
 @router.get("/admin", dependencies=[Depends(require_admin)])
@@ -815,6 +858,9 @@ def create_event(payload: EventCreate, session: Session = Depends(get_session)):
         end_date=end_date,
         announcement_url=None,
         announcement_urls_json=_safe_dump_urls(payload.announcement_urls),
+        public_announcement_url=(payload.public_announcement_url.strip() if payload.public_announcement_url else None),
+        interview_content=(payload.interview_content.strip() if payload.interview_content else None),
+        show_interview_content=bool(payload.interview_content and payload.show_interview_content),
         private_notes=(payload.private_notes.strip() if payload.private_notes else None),
         live_urls=",".join(item["url"] for item in live_media_items),
         live_media_items_json=json.dumps(live_media_items, ensure_ascii=False),
@@ -942,6 +988,17 @@ def update_event(event_id: int, payload: EventUpdate, session: Session = Depends
     if _field_was_sent(payload, "announcement_urls"):
         ev.announcement_urls_json = _safe_dump_urls(payload.announcement_urls)
         ev.announcement_url = None
+
+    if _field_was_sent(payload, "public_announcement_url"):
+        ev.public_announcement_url = payload.public_announcement_url.strip() if payload.public_announcement_url else None
+
+    if _field_was_sent(payload, "interview_content"):
+        ev.interview_content = payload.interview_content.strip() if payload.interview_content else None
+
+    if _field_was_sent(payload, "show_interview_content"):
+        ev.show_interview_content = bool(payload.show_interview_content)
+    if not ev.interview_content:
+        ev.show_interview_content = False
 
     if _field_was_sent(payload, "private_notes"):
         ev.private_notes = payload.private_notes.strip() if payload.private_notes else None

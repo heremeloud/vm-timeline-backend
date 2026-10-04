@@ -23,6 +23,7 @@ class CategoryUpdate(BaseModel):
     name: Optional[str] = None
     label: Optional[str] = None
     sort_order: Optional[int] = None
+    is_default: Optional[bool] = None
 
 
 class SubcategoryCreate(BaseModel):
@@ -65,6 +66,7 @@ def category_config(session: Session):
         "value": category.name,
         "label": category.label,
         "sort_order": category.sort_order,
+        "is_default": category.is_default,
         "subcategories": children.get(category.id, []),
     } for category in categories]
 
@@ -82,10 +84,12 @@ def create_category(payload: CategoryCreate, session: Session = Depends(get_sess
     if session.exec(select(EventCategoryOption).where(EventCategoryOption.name == name)).first():
         raise HTTPException(status_code=400, detail="Category already exists")
     last = session.exec(select(EventCategoryOption).order_by(EventCategoryOption.sort_order.desc())).first()
+    has_default = session.exec(select(EventCategoryOption).where(EventCategoryOption.is_default == True)).first()
     category = EventCategoryOption(
         name=name,
         label=(payload.label or "").strip() or default_label(name),
         sort_order=(last.sort_order + 1) if last else 0,
+        is_default=has_default is None,
     )
     session.add(category)
     session.commit()
@@ -116,6 +120,11 @@ def update_category(category_id: int, payload: CategoryUpdate, session: Session 
         category.label = payload.label.strip() or default_label(category.name)
     if payload.sort_order is not None:
         category.sort_order = payload.sort_order
+    if payload.is_default is True:
+        session.exec(update(EventCategoryOption).values(is_default=False))
+        category.is_default = True
+    elif payload.is_default is False and category.is_default:
+        raise HTTPException(status_code=400, detail="Choose another category to replace the current default")
     session.add(category)
     session.commit()
     session.refresh(category)
@@ -137,7 +146,16 @@ def delete_category(category_id: int, session: Session = Depends(get_session)):
         EventSubcategoryOption.category_id == category_id
     )).all():
         session.delete(subcategory)
+    was_default = category.is_default
     session.delete(category)
+    session.flush()
+    if was_default:
+        replacement = session.exec(
+            select(EventCategoryOption).order_by(EventCategoryOption.sort_order, EventCategoryOption.id)
+        ).first()
+        if replacement:
+            replacement.is_default = True
+            session.add(replacement)
     session.commit()
     return {"status": "deleted", "id": category_id}
 
