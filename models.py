@@ -92,6 +92,9 @@ class Post(SQLModel, table=True):
     timeline_context: Optional[str] = None  # curator-authored context, not the author's caption
     show_timeline_context: bool = Field(default=False)
     show_on_related_page: bool = Field(default=True)
+    # Explicit links to project rows (Q day, episode, fitting, workshop) chosen in the post form: a JSON list of
+    # {"entry_number", "entry_type", "project_id"}. Works for rows that have no hashtag or keyword.
+    project_entry_links_json: str = Field(default="[]")
 
     posted_at: Optional[str] = None
     posted_at_utc: Optional[str] = None  # exact ISO-8601 instant, normalized to UTC
@@ -284,6 +287,10 @@ class Project(SQLModel, table=True):
         back_populates="project",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"},
     )
+    fitting_workshops: List["ProjectFittingWorkshop"] = Relationship(
+        back_populates="project",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
 
 
 class ProjectFilmingDay(SQLModel, table=True):
@@ -295,6 +302,19 @@ class ProjectFilmingDay(SQLModel, table=True):
     keyword: Optional[str] = Field(default=None, index=True)
 
     project: Optional[Project] = Relationship(back_populates="filming_days")
+
+
+class ProjectFittingWorkshop(SQLModel, table=True):
+    """A fitting, workshop or prep day of a series, numbered per kind (Fitting Day 1, Workshop Day 1, Prep Day 1)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    kind: str = Field(index=True)                       # "fitting" | "workshop" | "prep" (both / general prep)
+    number: int = Field(index=True)
+    date: Optional[str] = Field(default=None, index=True)
+    hashtag: Optional[str] = Field(default=None, index=True)
+    keyword: Optional[str] = Field(default=None, index=True)
+
+    project: Optional[Project] = Relationship(back_populates="fitting_workshops")
 
 
 class ProjectEpisode(SQLModel, table=True):

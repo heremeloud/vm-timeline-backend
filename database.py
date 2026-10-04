@@ -108,6 +108,12 @@ def run_migrations():
             conn.commit()
             print("Migration: added show_on_related_page to post")
 
+        if "project_entry_links_json" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN project_entry_links_json VARCHAR DEFAULT '[]'"))
+            conn.execute(text("UPDATE post SET project_entry_links_json = '[]' WHERE project_entry_links_json IS NULL"))
+            conn.commit()
+            print("Migration: added project_entry_links_json to post")
+
         if "posted_at_utc" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN posted_at_utc VARCHAR"))
             conn.commit()
@@ -216,8 +222,20 @@ def run_migrations():
             conn.commit()
             print("Migration: added subcategory to event")
 
-        conn.execute(text("UPDATE event SET category = 'show', subcategory = 'interview' WHERE lower(trim(category)) = 'interview'"))
-        conn.execute(text("UPDATE event SET subcategory = lower(trim(category)), category = 'fan event' WHERE lower(trim(category)) IN ('fan sign', 'fan meet', 'fan fest')"))
+        # Legacy data only. Before "Interview" and the fan-event types became categories you can configure, they were stored as
+        # Show / Interview and Fan Event / <type>. This runs at every start, so convert such values ONLY while they are not a
+        # configured category; otherwise it undoes the admin's setup (an event saved as Interview / Magazine turned back into
+        # Show / Interview after the next restart).
+        conn.execute(text(
+            "UPDATE event SET category = 'show', subcategory = 'interview' "
+            "WHERE lower(trim(category)) = 'interview' "
+            "AND NOT EXISTS (SELECT 1 FROM eventcategoryoption WHERE lower(trim(name)) = 'interview')"
+        ))
+        conn.execute(text(
+            "UPDATE event SET subcategory = lower(trim(category)), category = 'fan event' "
+            "WHERE lower(trim(category)) IN ('fan sign', 'fan meet', 'fan fest') "
+            "AND NOT EXISTS (SELECT 1 FROM eventcategoryoption WHERE lower(trim(name)) = lower(trim(event.category)))"
+        ))
         conn.commit()
 
         renamed_program_events = conn.execute(

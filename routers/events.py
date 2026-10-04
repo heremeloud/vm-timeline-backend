@@ -7,7 +7,7 @@ from datetime import date
 
 from event_photos import EventPhoto, clean_photos, event_photos, set_event_photos
 from database import get_session
-from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode, ProjectFilmingDay
+from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode, ProjectFilmingDay, ProjectFittingWorkshop
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 
@@ -551,9 +551,16 @@ def list_categories(session: Session = Depends(get_session)):
     return {"categories": [category.name for category in categories], "subcategories": result}
 
 
+# How a project's fitting / workshop / prep rows are named: "Fitting Day 1", "Workshop Day 2", "Prep Day 1".
+FITTING_WORKSHOP_LABELS = {"fitting": "Fitting Day", "workshop": "Workshop Day", "prep": "Prep Day"}
+
+
 @router.get("/tag-index")
 def get_event_tag_index(session: Session = Depends(get_session)):
-    """Return event tags plus project and episode hashtags used by timeline post links."""
+    """Return event tags plus project, episode, filming-day, fitting and workshop entries used by post links.
+
+    Project rows are listed even without a hashtag (empty `tags`) so a post can be linked to them explicitly.
+    """
     events = session.exec(
         select(Event)
         .where(Event.is_visible == True)
@@ -569,7 +576,6 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         select(ProjectEpisode)
         .where(
             ProjectEpisode.project_id.in_(visible_project_ids),
-            ProjectEpisode.hashtag != None,
         )
         .order_by(ProjectEpisode.project_id, ProjectEpisode.episode_number, ProjectEpisode.id)
     ).all() if visible_project_ids else []
@@ -577,9 +583,15 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         select(ProjectFilmingDay)
         .where(
             ProjectFilmingDay.project_id.in_(visible_project_ids),
-            ProjectFilmingDay.hashtag != None,
         )
         .order_by(ProjectFilmingDay.project_id, ProjectFilmingDay.q_number, ProjectFilmingDay.id)
+    ).all() if visible_project_ids else []
+    fitting_workshops = session.exec(
+        select(ProjectFittingWorkshop)
+        .where(
+            ProjectFittingWorkshop.project_id.in_(visible_project_ids),
+        )
+        .order_by(ProjectFittingWorkshop.project_id, ProjectFittingWorkshop.kind, ProjectFittingWorkshop.number, ProjectFittingWorkshop.id)
     ).all() if visible_project_ids else []
     projects_by_id = {project.id: project for project in projects}
     event_entries = [
@@ -616,7 +628,7 @@ def get_event_tag_index(session: Session = Depends(get_session)):
         {
             "id": f"project-{episode.project_id}-episode-{episode.id}",
             "name": f"{projects_by_id[episode.project_id].title} EP{episode.episode_number}",
-            "tags": [episode.hashtag],
+            "tags": [episode.hashtag] if (episode.hashtag or "").strip() else [],
             "category": "project episode",
             "subcategory": None,
             "start_date": episode.air_date or projects_by_id[episode.project_id].start_date,
@@ -627,13 +639,12 @@ def get_event_tag_index(session: Session = Depends(get_session)):
             "is_episode": True,
         }
         for episode in episodes
-        if episode.hashtag and episode.hashtag.strip()
     ]
     filming_day_entries = [
         {
             "id": f"project-{day.project_id}-filming-{day.id}",
             "name": f"{projects_by_id[day.project_id].title} Q{day.q_number}",
-            "tags": [day.hashtag],
+            "tags": [day.hashtag] if (day.hashtag or "").strip() else [],
             "category": "project filming day",
             "subcategory": None,
             "start_date": day.filming_date or projects_by_id[day.project_id].start_date,
@@ -644,9 +655,25 @@ def get_event_tag_index(session: Session = Depends(get_session)):
             "is_filming_day": True,
         }
         for day in filming_days
-        if day.hashtag and day.hashtag.strip()
     ]
-    return event_entries + project_entries + episode_entries + filming_day_entries
+    fitting_workshop_entries = [
+        {
+            "id": f"project-{row.project_id}-{row.kind}-{row.id}",
+            "name": f"{projects_by_id[row.project_id].title} {FITTING_WORKSHOP_LABELS.get(row.kind, row.kind.title() + ' Day')} {row.number}",
+            "tags": [row.hashtag] if (row.hashtag or "").strip() else [],
+            "category": f"project {row.kind}",
+            "subcategory": None,
+            "start_date": row.date or projects_by_id[row.project_id].start_date,
+            "end_date": row.date or projects_by_id[row.project_id].end_date,
+            "project_id": row.project_id,
+            "fitting_workshop_kind": row.kind,
+            "fitting_workshop_number": row.number,
+            "is_project": True,
+            "is_fitting_workshop": True,
+        }
+        for row in fitting_workshops
+    ]
+    return event_entries + project_entries + episode_entries + filming_day_entries + fitting_workshop_entries
 
 
 @router.get("/admin", dependencies=[Depends(require_admin)])

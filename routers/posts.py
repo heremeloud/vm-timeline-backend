@@ -3,13 +3,13 @@ import os
 import re
 from collections import defaultdict
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import case, func, or_
+from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import case, func, or_, true
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, SQLModel, select, desc
 from database import get_session
-from models import Post, PostText, Author, Event, Project, ProjectFilmingDay, ProjectEpisode
-from middleware.auth import require_admin
+from models import Post, PostText, Author, Event, Project, ProjectFilmingDay, ProjectEpisode, ProjectFittingWorkshop
+from middleware.auth import is_admin_token, require_admin
 from instagram_archive import (
     InstagramArchiveError,
     InstagramArchiveRateLimitError,
@@ -111,6 +111,119 @@ def _filter_post_platform(query, platform: str | None):
     if platform == "ig-post":
         return query.where(Post.platform == "ig", Post.content_type == "post")
     return query.where(Post.platform == platform)
+
+
+def _related_page_filter(include_hidden: bool, authorization: str | None):
+    """Related lists show posts ticked "Show post on related page", even if hidden from the public timeline
+    (`is_visible` is deliberately not checked; a hidden author still hides the post).
+
+    The admin can ask for every linked post (`include_hidden`) to see what links where
+    regardless of that checkbox; this needs a valid admin token.
+    """
+    if not include_hidden:
+        return Post.show_on_related_page == True
+    token = (authorization if isinstance(authorization, str) else "").removeprefix("Bearer ").strip()
+    if not token or not is_admin_token(token):
+        raise HTTPException(status_code=403, detail="Admin only")
+    return true()
+
+
+PROJECT_ENTRY_TYPES = ("filming", "episodes", "fitting", "workshop", "prep")
+
+
+def _normalize_project_entry_links(value) -> str:
+    """Canonical JSON for a post's explicit project-row links, so SQL LIKE can match them exactly.
+
+    Accepts a JSON string or a list of {project_id, entry_type, entry_number}; invalid items are dropped.
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value or "[]")
+        except (TypeError, ValueError):
+            value = []
+    links = {}
+    for item in value if isinstance(value, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            project_id = int(item.get("project_id"))
+            entry_number = int(item.get("entry_number"))
+        except (TypeError, ValueError):
+            continue
+        entry_type = str(item.get("entry_type") or "").strip().lower()
+        if entry_type not in PROJECT_ENTRY_TYPES or entry_number < 0:
+            continue
+        links[(project_id, entry_type, entry_number)] = {
+            "entry_number": entry_number,
+            "entry_type": entry_type,
+            "project_id": project_id,
+        }
+    ordered = [links[key] for key in sorted(links)]
+    return json.dumps(ordered, sort_keys=True, separators=(",", ":"))
+
+
+def _post_project_entry_links(post: Post) -> set[tuple[int, str, int]]:
+    try:
+        items = json.loads(post.project_entry_links_json or "[]")
+    except (TypeError, ValueError):
+        return set()
+    return {
+        (item["project_id"], item["entry_type"], item["entry_number"])
+        for item in items
+        if isinstance(item, dict) and {"project_id", "entry_type", "entry_number"} <= item.keys()
+    }
+
+
+def _project_entry_link_like(project_id: int, entry_type: str | None = None, entry_number: int | None = None) -> str:
+    """LIKE pattern matching the canonical JSON of one project row (or any row of the project)."""
+    if entry_type is None or entry_number is None:
+        return f'%"project_id":{project_id}}}%'
+    return f'%"entry_number":{entry_number},"entry_type":"{entry_type}","project_id":{project_id}}}%'
+
+
+def _project_entry_rows(session: Session, project_id: int) -> list[tuple[str, int, str | None]]:
+    """Every Q day, episode, fitting and workshop row of a project as (entry_type, number, hashtag)."""
+    rows: list[tuple[str, int, str | None]] = []
+    for row in session.exec(select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)).all():
+        rows.append(("filming", row.q_number, row.hashtag))
+    for row in session.exec(select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)).all():
+        rows.append(("episodes", row.episode_number, row.hashtag))
+    for row in session.exec(select(ProjectFittingWorkshop).where(ProjectFittingWorkshop.project_id == project_id)).all():
+        rows.append((row.kind, row.number, row.hashtag))
+    return rows
+
+
+def _hashtags_in_post(post: Post) -> set[str]:
+    text = "\n".join(filter(None, (
+        post.caption,
+        post.caption_translation,
+        post.caption_translation_note,
+        post.timeline_context,
+    )))
+    return {match.casefold() for match in re.findall(r"#([\w]+)", text, flags=re.UNICODE)}
+
+
+def _get_visible_project(session: Session, project_ref: str) -> Project:
+    clean_project_ref = str(project_ref).strip()
+    project = session.get(Project, int(clean_project_ref)) if clean_project_ref.isdigit() else session.exec(
+        select(Project).where(Project.slug == clean_project_ref.lower())
+    ).first()
+    if not project or not project.is_visible:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+def _hashtag_like_conditions(tags) -> list:
+    conditions = []
+    for tag in tags:
+        pattern = f"%#{tag}%"
+        conditions.extend((
+            Post.caption.ilike(pattern),
+            Post.caption_translation.ilike(pattern),
+            Post.caption_translation_note.ilike(pattern),
+            Post.timeline_context.ilike(pattern),
+        ))
+    return conditions
 
 
 def _order_posts(query, sort: str = "newest"):
@@ -745,7 +858,12 @@ def get_timeline(
 
 
 @router.get("/event/{event_id}")
-def get_event_post_candidates(event_id: int, session: Session = Depends(get_session)):
+def get_event_post_candidates(
+    event_id: int,
+    session: Session = Depends(get_session),
+    include_hidden: bool = False,
+    authorization: str | None = Header(default=None),
+):
     """Return public posts that mention one of an event's tags.
 
     The client applies the shared event/date disambiguation logic so this list
@@ -787,8 +905,7 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
         .outerjoin(Author)
         .where(
             Post.parent_id == None,
-            Post.is_visible == True,
-            Post.show_on_related_page == True,
+            _related_page_filter(include_hidden, authorization),
             _has_public_author(),
             or_(*conditions),
         )
@@ -798,130 +915,107 @@ def get_event_post_candidates(event_id: int, session: Session = Depends(get_sess
 
 
 @router.get("/project/{project_ref}/related")
-def get_project_post_candidates(project_ref: str, hashtag: str, session: Session = Depends(get_session)):
-    """Return public posts for a project, filming-day, or episode hashtag."""
-    clean_project_ref = str(project_ref).strip()
-    project = session.get(Project, int(clean_project_ref)) if clean_project_ref.isdigit() else session.exec(
-        select(Project).where(Project.slug == clean_project_ref.lower())
-    ).first()
-    if not project or not project.is_visible:
-        raise HTTPException(status_code=404, detail="Project not found")
-    project_id = project.id
+def get_project_post_candidates(
+    project_ref: str,
+    hashtag: str = "",
+    session: Session = Depends(get_session),
+    include_hidden: bool = False,
+    authorization: str | None = Header(default=None),
+    entry_type: str | None = None,
+    entry_number: int | None = None,
+):
+    """Return posts related to a project, filming day, episode, fitting or workshop.
 
-    filming_days = session.exec(
-        select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)
-    ).all()
-    episodes = session.exec(
-        select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)
-    ).all()
+    A post is related when its text has the row's `hashtag`, or when it was explicitly linked to the row
+    (`entry_type` + `entry_number`) in the post form, which also works for rows without a hashtag.
+    """
+    project = _get_visible_project(session, project_ref)
+    rows = _project_entry_rows(session, project.id)
+
     allowed_tags = {
         str(value).strip().lstrip("#").casefold()
-        for value in [project.hashtag, *[row.hashtag for row in filming_days], *[row.hashtag for row in episodes]]
+        for value in [project.hashtag, *[tag for _type, _number, tag in rows]]
         if str(value or "").strip().lstrip("#")
     }
     clean_hashtag = hashtag.strip().lstrip("#")
-    if not clean_hashtag or clean_hashtag.casefold() not in allowed_tags:
+    if clean_hashtag and clean_hashtag.casefold() not in allowed_tags:
         raise HTTPException(status_code=404, detail="Project hashtag not found")
 
-    pattern = f"%#{clean_hashtag}%"
+    link = None
+    if entry_type is not None or entry_number is not None:
+        if (entry_type, entry_number) not in {(row_type, row_number) for row_type, row_number, _tag in rows}:
+            raise HTTPException(status_code=404, detail="Project entry not found")
+        link = (project.id, entry_type, entry_number)
+    if not clean_hashtag and link is None:
+        return []
+
+    conditions = _hashtag_like_conditions([clean_hashtag] if clean_hashtag else [])
+    if link is not None:
+        conditions.append(Post.project_entry_links_json.like(_project_entry_link_like(*link)))
     query = (
         select(Post)
         .outerjoin(Author)
         .where(
             Post.parent_id == None,
-            Post.is_visible == True,
-            Post.show_on_related_page == True,
+            _related_page_filter(include_hidden, authorization),
             _has_public_author(),
-            or_(
-                Post.caption.ilike(pattern),
-                Post.caption_translation.ilike(pattern),
-                Post.caption_translation_note.ilike(pattern),
-                Post.timeline_context.ilike(pattern),
-            ),
+            or_(*conditions),
         )
     )
-    posts = session.exec(_order_posts(query, "newest")).all()
     normalized_hashtag = clean_hashtag.casefold()
     posts = [
-        post for post in posts
-        if normalized_hashtag in {
-            match.casefold()
-            for match in re.findall(
-                r"#([\w]+)",
-                "\n".join(filter(None, (
-                    post.caption,
-                    post.caption_translation,
-                    post.caption_translation_note,
-                    post.timeline_context,
-                ))),
-                flags=re.UNICODE,
-            )
-        }
+        post for post in session.exec(_order_posts(query, "newest")).all()
+        if (normalized_hashtag and normalized_hashtag in _hashtags_in_post(post))
+        or (link is not None and link in _post_project_entry_links(post))
     ]
     return _hydrate_posts(session, posts)
 
 
 @router.get("/project/{project_ref}/related-counts")
-def get_project_related_post_counts(project_ref: str, session: Session = Depends(get_session)):
-    """Return related-post counts for every filming-day and episode hashtag."""
-    clean_project_ref = str(project_ref).strip()
-    project = session.get(Project, int(clean_project_ref)) if clean_project_ref.isdigit() else session.exec(
-        select(Project).where(Project.slug == clean_project_ref.lower())
-    ).first()
-    if not project or not project.is_visible:
-        raise HTTPException(status_code=404, detail="Project not found")
+def get_project_related_post_counts(
+    project_ref: str,
+    session: Session = Depends(get_session),
+    include_hidden: bool = False,
+    authorization: str | None = Header(default=None),
+):
+    """Related-post counts per project row.
 
-    filming_days = session.exec(
-        select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project.id)
-    ).all()
-    episodes = session.exec(
-        select(ProjectEpisode).where(ProjectEpisode.project_id == project.id)
-    ).all()
+    Keys: every row hashtag, plus `<entry_type>:<number>` for every row (`filming:3`, `fitting:1`, …) so rows
+    without a hashtag are counted too. A post counts once per row, by hashtag or by explicit link.
+    """
+    project = _get_visible_project(session, project_ref)
+    rows = _project_entry_rows(session, project.id)
+
     tags_by_key = {
         clean.casefold(): clean
-        for value in [*[row.hashtag for row in filming_days], *[row.hashtag for row in episodes]]
+        for _type, _number, value in rows
         if (clean := str(value or "").strip().lstrip("#"))
     }
-    if not tags_by_key:
-        return {}
-
-    conditions = []
-    for tag in tags_by_key.values():
-        pattern = f"%#{tag}%"
-        conditions.extend((
-            Post.caption.ilike(pattern),
-            Post.caption_translation.ilike(pattern),
-            Post.caption_translation_note.ilike(pattern),
-            Post.timeline_context.ilike(pattern),
-        ))
+    conditions = _hashtag_like_conditions(tags_by_key.values())
+    conditions.append(Post.project_entry_links_json.like(_project_entry_link_like(project.id)))
     query = (
         select(Post)
         .outerjoin(Author)
         .where(
             Post.parent_id == None,
-            Post.is_visible == True,
-            Post.show_on_related_page == True,
+            _related_page_filter(include_hidden, authorization),
             _has_public_author(),
             or_(*conditions),
         )
     )
-    counts = {tag: 0 for tag in tags_by_key.values()}
-    for post in session.exec(query).all():
-        post_tags = {
-            match.casefold()
-            for match in re.findall(
-                r"#([\w]+)",
-                "\n".join(filter(None, (
-                    post.caption,
-                    post.caption_translation,
-                    post.caption_translation_note,
-                    post.timeline_context,
-                ))),
-                flags=re.UNICODE,
-            )
-        }
-        for key in post_tags & tags_by_key.keys():
-            counts[tags_by_key[key]] += 1
+    posts = session.exec(query).all()
+
+    counts: dict[str, int] = {}
+    for entry_type, number, value in rows:
+        tag = str(value or "").strip().lstrip("#")
+        key = tag.casefold()
+        total = sum(
+            1 for post in posts
+            if (key and key in _hashtags_in_post(post)) or (project.id, entry_type, number) in _post_project_entry_links(post)
+        )
+        counts[f"{entry_type}:{number}"] = total
+        if tag:
+            counts[tag] = total
     return counts
 
 
@@ -945,6 +1039,7 @@ def get_post(post_id: int, session: Session = Depends(get_session)):
 
 @router.post("/", dependencies=[Depends(require_admin)])
 def create_post(post: Post, session: Session = Depends(get_session)):
+    post.project_entry_links_json = _normalize_project_entry_links(post.project_entry_links_json)
     _normalize_post_author(post)
     _normalize_display_source(post)
     post.posted_at_utc = _normalize_utc_timestamp(post.posted_at_utc)
@@ -1112,6 +1207,8 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
 
     if "posted_at_utc" in updates:
         updates["posted_at_utc"] = _normalize_utc_timestamp(updates["posted_at_utc"])
+    if "project_entry_links_json" in updates:
+        updates["project_entry_links_json"] = _normalize_project_entry_links(updates["project_entry_links_json"])
 
     if post.parent_id is not None:
         parent = session.get(Post, post.parent_id)

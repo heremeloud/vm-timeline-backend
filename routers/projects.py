@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from event_photos import event_photos
 from database import get_session
-from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, Author, ProjectAuthorLink, Event
+from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, ProjectFittingWorkshop, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
 from constants import PROJECT_CATEGORIES
 from relationship_chart import RelationshipChartData
@@ -151,8 +151,19 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
         .where(ProjectEpisode.project_id == p.id)
         .order_by(ProjectEpisode.episode_number, ProjectEpisode.id)
     ).all()
+    fitting_workshops = session.exec(
+        select(ProjectFittingWorkshop)
+        .where(ProjectFittingWorkshop.project_id == p.id)
+        .order_by(ProjectFittingWorkshop.kind, ProjectFittingWorkshop.number, ProjectFittingWorkshop.id)
+    ).all()
     obj["filming_days"] = [row.dict() for row in filming_days]
     obj["episode_metadata"] = [row.dict() for row in episodes]
+    obj["fitting_workshops"] = [
+        row.dict() for row in sorted(
+            fitting_workshops,
+            key=lambda row: (FITTING_WORKSHOP_KINDS.index(row.kind) if row.kind in FITTING_WORKSHOP_KINDS else len(FITTING_WORKSHOP_KINDS), row.number, row.id or 0),
+        )
+    ]
     return obj
 
 
@@ -248,47 +259,68 @@ def _get_project_by_ref(session: Session, project_ref: str) -> Optional[Project]
     return session.exec(select(Project).where(Project.slug == project_ref.strip().lower())).first()
 
 
+FITTING_WORKSHOP_KINDS = ("fitting", "workshop", "prep")  # prep: a day that is both, or general preparation
+
+
 def _clean_hashtag(value: Optional[str]) -> Optional[str]:
     clean = (value or "").strip().lstrip("#").replace(" ", "")
     return clean or None
 
 
-def _replace_series_metadata(session: Session, project_id: int, filming_days, episodes) -> None:
-    old_qs = session.exec(
-        select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)
-    ).all()
-    old_episodes = session.exec(
-        select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)
-    ).all()
-    for row in [*old_qs, *old_episodes]:
-        session.delete(row)
+def _replace_series_metadata(session: Session, project_id: int, filming_days, episodes, fitting_workshops=None) -> None:
+    """Replace each collection that was sent; a collection left as None is not touched."""
+    if filming_days is not None:
+        for row in session.exec(select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)).all():
+            session.delete(row)
+        seen_qs = set()
+        for row in filming_days:
+            if row.q_number < 1 or row.q_number in seen_qs:
+                raise HTTPException(status_code=400, detail="Q numbers must be positive and unique")
+            seen_qs.add(row.q_number)
+            session.add(ProjectFilmingDay(
+                project_id=project_id,
+                q_number=row.q_number,
+                filming_date=(row.filming_date or "").strip() or None,
+                hashtag=_clean_hashtag(row.hashtag),
+                keyword=(row.keyword or "").strip() or None,
+            ))
 
-    seen_qs = set()
-    for row in filming_days or []:
-        if row.q_number < 1 or row.q_number in seen_qs:
-            raise HTTPException(status_code=400, detail="Q numbers must be positive and unique")
-        seen_qs.add(row.q_number)
-        session.add(ProjectFilmingDay(
-            project_id=project_id,
-            q_number=row.q_number,
-            filming_date=(row.filming_date or "").strip() or None,
-            hashtag=_clean_hashtag(row.hashtag),
-            keyword=(row.keyword or "").strip() or None,
-        ))
+    if episodes is not None:
+        for row in session.exec(select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)).all():
+            session.delete(row)
+        seen_episodes = set()
+        for row in episodes:
+            if row.episode_number < 0 or row.episode_number in seen_episodes:
+                raise HTTPException(status_code=400, detail="Episode numbers must be zero or greater and unique")
+            seen_episodes.add(row.episode_number)
+            session.add(ProjectEpisode(
+                project_id=project_id,
+                episode_number=row.episode_number,
+                air_date=(row.air_date or "").strip() or None,
+                title=(row.title or "").strip() or None,
+                hashtag=_clean_hashtag(row.hashtag),
+                keyword=(row.keyword or "").strip() or None,
+            ))
 
-    seen_episodes = set()
-    for row in episodes or []:
-        if row.episode_number < 0 or row.episode_number in seen_episodes:
-            raise HTTPException(status_code=400, detail="Episode numbers must be zero or greater and unique")
-        seen_episodes.add(row.episode_number)
-        session.add(ProjectEpisode(
-            project_id=project_id,
-            episode_number=row.episode_number,
-            air_date=(row.air_date or "").strip() or None,
-            title=(row.title or "").strip() or None,
-            hashtag=_clean_hashtag(row.hashtag),
-            keyword=(row.keyword or "").strip() or None,
-        ))
+    if fitting_workshops is not None:
+        for row in session.exec(select(ProjectFittingWorkshop).where(ProjectFittingWorkshop.project_id == project_id)).all():
+            session.delete(row)
+        seen_fw = set()
+        for row in fitting_workshops:
+            kind = (row.kind or "").strip().lower()
+            if kind not in FITTING_WORKSHOP_KINDS:
+                raise HTTPException(status_code=400, detail="Fitting & Workshop type must be fitting, workshop or prep")
+            if row.number < 1 or (kind, row.number) in seen_fw:
+                raise HTTPException(status_code=400, detail="Fitting and workshop numbers must be positive and unique per type")
+            seen_fw.add((kind, row.number))
+            session.add(ProjectFittingWorkshop(
+                project_id=project_id,
+                kind=kind,
+                number=row.number,
+                date=(row.date or "").strip() or None,
+                hashtag=_clean_hashtag(row.hashtag),
+                keyword=(row.keyword or "").strip() or None,
+            ))
 
 
 # ----------------------------
@@ -298,6 +330,14 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
 class ProjectFilmingDayInput(BaseModel):
     q_number: int
     filming_date: Optional[str] = None
+    hashtag: Optional[str] = None
+    keyword: Optional[str] = None
+
+
+class ProjectFittingWorkshopInput(BaseModel):
+    kind: str
+    number: int
+    date: Optional[str] = None
     hashtag: Optional[str] = None
     keyword: Optional[str] = None
 
@@ -340,6 +380,7 @@ class ProjectCreate(BaseModel):
     author_ids: Optional[List[int]] = None
     filming_days: Optional[List[ProjectFilmingDayInput]] = None
     episode_metadata: Optional[List[ProjectEpisodeInput]] = None
+    fitting_workshops: Optional[List[ProjectFittingWorkshopInput]] = None
 
 
 class ProjectUpdate(BaseModel):
@@ -374,6 +415,7 @@ class ProjectUpdate(BaseModel):
     author_ids: Optional[List[int]] = None
     filming_days: Optional[List[ProjectFilmingDayInput]] = None
     episode_metadata: Optional[List[ProjectEpisodeInput]] = None
+    fitting_workshops: Optional[List[ProjectFittingWorkshopInput]] = None
 
 
 # ----------------------------
@@ -528,7 +570,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
     for a in authors:
         session.add(ProjectAuthorLink(project_id=p.id, author_id=a.id))
     if category == "series":
-        _replace_series_metadata(session, p.id, payload.filming_days, payload.episode_metadata)
+        _replace_series_metadata(session, p.id, payload.filming_days, payload.episode_metadata, payload.fitting_workshops)
     session.commit()
 
     return _serialize_project(session, p)
@@ -646,13 +688,18 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
             session.delete(l)
         session.commit()
 
-    metadata_was_sent = payload.filming_days is not None or payload.episode_metadata is not None
+    metadata_was_sent = (
+        payload.filming_days is not None
+        or payload.episode_metadata is not None
+        or payload.fitting_workshops is not None
+    )
     if metadata_was_sent or p.category != "series":
         _replace_series_metadata(
             session,
             project_id,
             payload.filming_days if p.category == "series" else [],
             payload.episode_metadata if p.category == "series" else [],
+            payload.fitting_workshops if p.category == "series" else [],
         )
         session.commit()
         for a in _ensure_authors(session, payload.author_ids):
