@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlmodel import Session, select, desc
 from sqlalchemy import func, or_, and_
 from typing import Optional, List, Any, Dict, Literal
@@ -556,11 +556,19 @@ FITTING_WORKSHOP_LABELS = {"fitting": "Fitting Day", "workshop": "Workshop Day",
 
 
 @router.get("/tag-index")
-def get_event_tag_index(session: Session = Depends(get_session)):
+def get_event_tag_index(
+    session: Session = Depends(get_session),
+    response: Response = None,
+):
     """Return event tags plus project, episode, filming-day, fitting and workshop entries used by post links.
 
     Project rows are listed even without a hashtag (empty `tags`) so a post can be linked to them explicitly.
     """
+    if response is not None:
+        response.headers["Cache-Control"] = (
+            "public, max-age=0, s-maxage=300, stale-while-revalidate=600"
+        )
+
     events = session.exec(
         select(Event)
         .where(Event.is_visible == True)

@@ -866,8 +866,14 @@ def get_timeline(
     offset: int = 0,
     limit: int = 10,
     session: Session = Depends(get_session),
+    response: Response = None,
 ):
     """Return one fully-hydrated timeline page without per-post API calls."""
+    if response is not None:
+        response.headers["Cache-Control"] = (
+            "public, max-age=0, s-maxage=60, stale-while-revalidate=300"
+        )
+
     query = (
         select(Post)
         .outerjoin(Author)

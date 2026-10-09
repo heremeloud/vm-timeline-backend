@@ -1,3 +1,5 @@
+import os
+
 from sqlmodel import SQLModel, create_engine, Session
 from sqlalchemy import text
 
@@ -5,7 +7,7 @@ DATABASE_URL = "sqlite:///vm-social.db"
 
 engine = create_engine(
     DATABASE_URL,
-    echo=True
+    echo=os.getenv("SQL_ECHO", "").lower() in {"1", "true", "yes"},
 )
 
 def create_db_and_tables():
