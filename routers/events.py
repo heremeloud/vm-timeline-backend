@@ -176,7 +176,7 @@ def _clean_live_media_items(items) -> List[Dict[str, Optional[str]]]:
         keyword = str(raw.get("keyword") or "").strip() or None
         date = str(raw.get("date") or "").strip() or None
         display_type = str(raw.get("display_type") or "auto").strip().lower()
-        if display_type not in {"auto", "article", "tweet", "youtube"}:
+        if display_type not in {"auto", "article", "tweet", "tiktok", "youtube"}:
             display_type = "auto"
         clean.append({"url": url, "date": date, "keyword": keyword, "hashtag": hashtag, "display_type": display_type})
     return clean
@@ -458,7 +458,7 @@ class LiveMediaItem(BaseModel):
     date: Optional[str] = None
     keyword: Optional[str] = None
     hashtag: Optional[str] = None
-    display_type: Literal["auto", "article", "tweet", "youtube"] = "auto"
+    display_type: Literal["auto", "article", "tweet", "tiktok", "youtube"] = "auto"
 
 
 class EventDateItem(BaseModel):

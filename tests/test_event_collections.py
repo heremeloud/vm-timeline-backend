@@ -62,11 +62,13 @@ class EventCollectionsTests(unittest.TestCase):
         media = [
             {"url": "https://example.com/interview", "date": "2026-09-01", "display_type": "article"},
             {"url": "https://x.com/example/status/123", "display_type": "tweet", "hashtag": "#Interview"},
+            {"url": "https://www.tiktok.com/@example/video/123", "display_type": "tiktok"},
         ]
         saved = create_event(EventCreate(name="Interview", live_media_items=media), self.session)
         self.assertEqual(saved["live_media_items"], [
             {"url": "https://example.com/interview", "date": "2026-09-01", "keyword": None, "hashtag": None, "display_type": "article"},
             {"url": "https://x.com/example/status/123", "date": None, "keyword": None, "hashtag": "Interview", "display_type": "tweet"},
+            {"url": "https://www.tiktok.com/@example/video/123", "date": None, "keyword": None, "hashtag": None, "display_type": "tiktok"},
         ])
 
         legacy = create_event(EventCreate(
