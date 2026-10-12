@@ -605,6 +605,24 @@ def run_migrations():
             conn.commit()
             print("Migration: seeded configurable event categories")
 
+        project_category_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(projectcategoryoption)"))}
+        if "is_visible" not in project_category_cols:
+            conn.execute(text("ALTER TABLE projectcategoryoption ADD COLUMN is_visible BOOLEAN DEFAULT 1"))
+            conn.commit()
+            print("Migration: added is_visible to projectcategoryoption")
+
+        project_category_count = conn.execute(text("SELECT COUNT(*) FROM projectcategoryoption")).scalar_one()
+        if project_category_count == 0:
+            from constants import PROJECT_CATEGORIES
+
+            for order, category in enumerate(PROJECT_CATEGORIES):
+                conn.execute(text(
+                    "INSERT INTO projectcategoryoption (name, label, sort_order, is_visible) "
+                    "VALUES (:name, :label, :sort_order, 1)"
+                ), {"name": category, "label": category.title(), "sort_order": order})
+            conn.commit()
+            print("Migration: seeded configurable project categories")
+
         default_category_count = conn.execute(text(
             "SELECT COUNT(*) FROM eventcategoryoption WHERE is_default = 1"
         )).scalar_one()

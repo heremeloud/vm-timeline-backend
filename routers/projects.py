@@ -8,14 +8,14 @@ from pydantic import BaseModel
 
 from event_photos import event_photos
 from database import get_session
+from search_rules import project_search_filter
 from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, ProjectFittingWorkshop, Author, ProjectAuthorLink, Event
 from middleware.auth import require_admin
-from constants import PROJECT_CATEGORIES
+from routers.project_categories import project_category_names
 from relationship_chart import RelationshipChartData
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
-VALID_CATEGORIES = set(PROJECT_CATEGORIES)
 
 
 # ----------------------------
@@ -423,19 +423,24 @@ class ProjectUpdate(BaseModel):
 # ----------------------------
 
 @router.get("/categories")
-def list_categories():
-    return {"categories": PROJECT_CATEGORIES}
+def list_categories(session: Session = Depends(get_session)):
+    return {"categories": project_category_names(session)}
 
 
 @router.get("/admin", dependencies=[Depends(require_admin)])
 def list_admin_projects(
     sort: str = "newest",
+    name: Optional[str] = None,
     category: Optional[str] = None,
     offset: int = 0,
     limit: int = 50,
     session: Session = Depends(get_session),
 ):
     query = select(Project)
+
+    search_filter = project_search_filter(session, name)
+    if search_filter is not None:
+        query = query.where(search_filter)
 
     if category:
         query = query.where(Project.category == category.strip().lower())
@@ -451,10 +456,14 @@ def list_admin_projects(
 
 @router.get("/admin/count", dependencies=[Depends(require_admin)])
 def count_admin_projects(
+    name: Optional[str] = None,
     category: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(func.count(Project.id))
+    search_filter = project_search_filter(session, name)
+    if search_filter is not None:
+        query = query.where(search_filter)
     if category:
         query = query.where(Project.category == category.strip().lower())
     return {"count": session.exec(query).one()}
@@ -515,8 +524,9 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         raise HTTPException(status_code=400, detail="Title is required")
 
     category = payload.category.strip().lower() if payload.category else None
-    if category and category not in VALID_CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+    valid_categories = project_category_names(session)
+    if category and category not in valid_categories:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}")
 
     slug = _normalize_slug(payload.slug)
     if slug:
@@ -601,8 +611,9 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
 
     if payload.category is not None:
         cat = payload.category.strip().lower() or None
-        if cat and cat not in VALID_CATEGORIES:
-            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(sorted(VALID_CATEGORIES))}")
+        valid_categories = project_category_names(session)
+        if cat and cat not in valid_categories:
+            raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of: {', '.join(valid_categories)}")
         p.category = cat
         if cat != "series":
             p.episode_count = None

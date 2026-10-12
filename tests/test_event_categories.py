@@ -14,6 +14,7 @@ from routers.event_categories import (
     create_subcategory,
     delete_category,
     delete_subcategory,
+    event_counts,
     update_category,
     update_subcategory,
 )
@@ -85,6 +86,25 @@ class EventCategoryTests(unittest.TestCase):
         delete_category(first.id, self.session)
         config = category_config(self.session)
         self.assertEqual([item["value"] for item in config if item["is_default"]], ["second"])
+
+
+class EventCategoryCountTests(unittest.TestCase):
+    def test_counts_per_category_and_subcategory(self):
+        engine = create_engine("sqlite://")
+        SQLModel.metadata.create_all(engine)
+        with Session(engine) as session:
+            session.add_all([
+                Event(name="a", category="show", subcategory="talk"),
+                Event(name="b", category="show", subcategory="talk"),
+                Event(name="c", category="show"),
+                Event(name="d", category="live", is_visible=False),
+                Event(name="e"),
+            ])
+            session.commit()
+            counts = event_counts(session)
+        self.assertEqual(counts["categories"], {"show": 3, "live": 1})
+        self.assertEqual(counts["subcategories"], {"show:talk": 2})
+        engine.dispose()
 
 
 if __name__ == "__main__":

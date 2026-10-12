@@ -415,7 +415,26 @@ class EventSubcategoryOption(SQLModel, table=True):
     sort_order: int = Field(default=0, index=True)
 
 
+class ProjectCategoryOption(SQLModel, table=True):
+    """Admin-managed project category (series, concert, …). "series" is special in code and cannot be renamed or deleted."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    label: str
+    sort_order: int = Field(default=0, index=True)
+    is_visible: bool = Field(default=True)  # hidden categories are left out of the public Projects filter only
+
+
 class ProjectRelationshipChart(SQLModel, table=True):
     __tablename__ = "project_relationship_chart"
     project_id: int = Field(primary_key=True, foreign_key="project.id")
     data_json: str
+
+
+# ---------- SEARCH SETTINGS (single row, id = 1) ----------
+class SearchSettings(SQLModel, table=True):
+    """Admin-editable rules for event/project search. See docs/search-rules.md in the frontend."""
+
+    id: Optional[int] = Field(default=1, primary_key=True)
+    identity_tags_json: Optional[str] = None   # JSON list; None means "use the built-in defaults"
+    typo_tolerance: str = Field(default="normal")  # off | normal | loose

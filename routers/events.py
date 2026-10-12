@@ -7,6 +7,7 @@ from datetime import date
 
 from event_photos import EventPhoto, clean_photos, event_photos, set_event_photos
 from database import get_session
+from search_rules import event_search_filter
 from models import Event, Author, EventAuthorLink, EventCategoryOption, EventSubcategoryOption, Project, ProjectEpisode, ProjectFilmingDay, ProjectFittingWorkshop
 from middleware.auth import require_admin
 from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
@@ -699,18 +700,9 @@ def list_admin_events(
 ):
     query = select(Event)
 
-    if name:
-        raw_term = name.strip()
-        search_term = f"%{raw_term}%"
-        tag_term = f"%{raw_term.lstrip('#')}%"
-        query = query.where(or_(
-            Event.name.ilike(search_term),
-            Event.english_name.ilike(search_term),
-            Event.keyword.ilike(search_term),
-            Event.tags_json.ilike(tag_term),
-            Event.date_items_json.ilike(search_term),
-            Event.date_items_json.ilike(tag_term),
-        ))
+    search_filter = event_search_filter(session, name)
+    if search_filter is not None:
+        query = query.where(search_filter)
 
     if category:
         query = query.where(Event.category == category.strip().lower())
@@ -735,25 +727,21 @@ def count_admin_events(
     name: Optional[str] = None,
     category: Optional[str] = None,
     subcategory: Optional[str] = None,
+    author: Optional[str] = None,
+    visible_start: Optional[str] = None,
+    visible_end: Optional[str] = None,
     session: Session = Depends(get_session),
 ):
     query = select(func.count(Event.id))
-    if name:
-        raw_term = name.strip()
-        search_term = f"%{raw_term}%"
-        tag_term = f"%{raw_term.lstrip('#')}%"
-        query = query.where(or_(
-            Event.name.ilike(search_term),
-            Event.english_name.ilike(search_term),
-            Event.keyword.ilike(search_term),
-            Event.tags_json.ilike(tag_term),
-            Event.date_items_json.ilike(search_term),
-            Event.date_items_json.ilike(tag_term),
-        ))
+    search_filter = event_search_filter(session, name)
+    if search_filter is not None:
+        query = query.where(search_filter)
     if category:
         query = query.where(Event.category == category.strip().lower())
     if subcategory:
         query = query.where(Event.subcategory == subcategory.strip().lower())
+    query = _filter_events_by_author(query, author, session)
+    query = _filter_event_dates(query, visible_start, visible_end)
     return {"count": session.exec(query).one()}
 
 
@@ -785,18 +773,9 @@ def list_events(
 ):
     query = select(Event).where(Event.is_visible == True)
 
-    if name:
-        raw_term = name.strip()
-        search_term = f"%{raw_term}%"
-        tag_term = f"%{raw_term.lstrip('#')}%"
-        query = query.where(or_(
-            Event.name.ilike(search_term),
-            Event.english_name.ilike(search_term),
-            Event.keyword.ilike(search_term),
-            Event.tags_json.ilike(tag_term),
-            Event.date_items_json.ilike(search_term),
-            Event.date_items_json.ilike(tag_term),
-        ))
+    search_filter = event_search_filter(session, name)
+    if search_filter is not None:
+        query = query.where(search_filter)
 
     if keyword:
         query = query.where(or_(

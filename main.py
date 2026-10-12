@@ -10,11 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database import create_db_and_tables, get_session, run_migrations
-from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES, PROJECT_CATEGORIES
+from constants import EVENT_CATEGORIES, EVENT_SUBCATEGORIES
 from middleware.rate_limit import RateLimiter
 
 # Routers
-from routers import posts, texts, authors, events, event_categories, event_views, projects, topics, media
+from routers import posts, texts, authors, events, event_categories, event_views, projects, project_categories, topics, media, search_settings
 
 
 app = FastAPI(title="VM Social Timeline API")
@@ -76,7 +76,7 @@ def list_categories(session: Session = Depends(get_session)):
             "name": category,
             "subcategories": EVENT_SUBCATEGORIES.get(category, []),
         } for category in EVENT_CATEGORIES],
-        "projects": PROJECT_CATEGORIES,
+        "projects": project_categories.project_category_names(session),
     }
 
 
@@ -91,6 +91,8 @@ app.include_router(events.router)    # /events/...
 app.include_router(event_categories.router)  # /event-categories/...
 app.include_router(event_views.router)  # /event-views/...
 app.include_router(projects.router)  # /projects/...
+app.include_router(project_categories.router)  # /project-categories/...
+app.include_router(search_settings.router)  # /search-settings
 app.include_router(topics.router)    # /topics/....
 app.include_router(media.router)     # /media/upload
 

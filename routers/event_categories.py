@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlmodel import Session, select
 
 from database import get_session
@@ -74,6 +74,27 @@ def category_config(session: Session):
 @router.get("")
 def list_event_categories(session: Session = Depends(get_session)):
     return category_config(session)
+
+
+def event_counts(session: Session) -> dict:
+    """How many events use each category, and each "category:subcategory" pair (admin only: includes hidden events)."""
+    categories: dict[str, int] = {}
+    subcategories: dict[str, int] = {}
+    rows = session.exec(
+        select(Event.category, Event.subcategory, func.count(Event.id)).group_by(Event.category, Event.subcategory)
+    ).all()
+    for category, subcategory, count in rows:
+        if not category:
+            continue
+        categories[category] = categories.get(category, 0) + count
+        if subcategory:
+            subcategories[f"{category}:{subcategory}"] = count
+    return {"categories": categories, "subcategories": subcategories}
+
+
+@router.get("/admin/counts", dependencies=[Depends(require_admin)])
+def get_event_category_counts(session: Session = Depends(get_session)):
+    return event_counts(session)
 
 
 @router.post("/admin", dependencies=[Depends(require_admin)])
