@@ -121,6 +121,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added posted_at_utc to post")
 
+        if "estimated_posted_at_utc" not in post_cols:
+            conn.execute(text("ALTER TABLE post ADD COLUMN estimated_posted_at_utc VARCHAR"))
+            conn.commit()
+            print("Migration: added estimated_posted_at_utc to post")
+
         if "posted_at_is_estimated" not in post_cols:
             conn.execute(text("ALTER TABLE post ADD COLUMN posted_at_is_estimated BOOLEAN DEFAULT 0"))
             conn.execute(text("UPDATE post SET posted_at_is_estimated = 0 WHERE posted_at_is_estimated IS NULL"))

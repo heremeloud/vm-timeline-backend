@@ -88,15 +88,15 @@ def _filter_admin_author(query, author_filter: str | None):
     return query.where(Post.author_id == saved_author_id)
 
 
-def _normalize_utc_timestamp(value: str | None) -> str | None:
+def _normalize_utc_timestamp(value: str | None, field: str = "posted_at_utc") -> str | None:
     if not value:
         return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail="posted_at_utc must be an ISO-8601 timestamp") from exc
+        raise HTTPException(status_code=422, detail=f"{field} must be an ISO-8601 timestamp") from exc
     if parsed.tzinfo is None:
-        raise HTTPException(status_code=422, detail="posted_at_utc must include a timezone")
+        raise HTTPException(status_code=422, detail=f"{field} must include a timezone")
     return parsed.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
@@ -1138,6 +1138,7 @@ def create_post(post: Post, session: Session = Depends(get_session)):
     _normalize_post_author(post)
     _normalize_display_source(post)
     post.posted_at_utc = _normalize_utc_timestamp(post.posted_at_utc)
+    post.estimated_posted_at_utc = _normalize_utc_timestamp(post.estimated_posted_at_utc, "estimated_posted_at_utc")
     if post.parent_id is not None:
         parent = session.get(Post, post.parent_id)
         if not parent:
@@ -1302,6 +1303,8 @@ def update_post(post_id: int, updates: dict, session: Session = Depends(get_sess
 
     if "posted_at_utc" in updates:
         updates["posted_at_utc"] = _normalize_utc_timestamp(updates["posted_at_utc"])
+    if "estimated_posted_at_utc" in updates:
+        updates["estimated_posted_at_utc"] = _normalize_utc_timestamp(updates["estimated_posted_at_utc"], "estimated_posted_at_utc")
     if "project_entry_links_json" in updates:
         updates["project_entry_links_json"] = _normalize_project_entry_links(updates["project_entry_links_json"])
 
