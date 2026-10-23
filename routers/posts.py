@@ -263,7 +263,11 @@ def _hashtag_like_conditions(tags) -> list:
 
 
 def _order_posts(query, sort: str = "newest"):
-    """Sort exact-only dates chronologically and mixed/date-only dates manually."""
+    """Sort dates where every post has a time chronologically and mixed/date-only dates manually.
+
+    A post's time is its exact time, or else the time entered as "N hours ago" for date-only content
+    (estimated_posted_at_utc, e.g. IG stories). A date is manual as soon as one post on it has neither.
+    """
     same_date_post = aliased(Post)
     date_has_date_only_post = (
         select(same_date_post.id)
@@ -271,11 +275,15 @@ def _order_posts(query, sort: str = "newest"):
             same_date_post.parent_id == None,
             same_date_post.posted_at == Post.posted_at,
             same_date_post.posted_at_utc == None,
+            same_date_post.estimated_posted_at_utc == None,
         )
         .exists()
     )
     manual_order = case((date_has_date_only_post, Post.sort_order), else_=0)
-    exact_order = case((date_has_date_only_post, None), else_=Post.posted_at_utc)
+    exact_order = case(
+        (date_has_date_only_post, None),
+        else_=func.coalesce(Post.posted_at_utc, Post.estimated_posted_at_utc),
+    )
     if sort == "newest":
         return query.order_by(
             desc(Post.posted_at),

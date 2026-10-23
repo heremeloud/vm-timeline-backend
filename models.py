@@ -99,8 +99,8 @@ class Post(SQLModel, table=True):
     posted_at: Optional[str] = None
     posted_at_utc: Optional[str] = None  # exact ISO-8601 instant, normalized to UTC
     posted_at_is_estimated: bool = Field(default=False)
-    # Display-only time for date-only content (IG stories/reels) entered as "N hours ago". Never used for ordering:
-    # a day's order is decided by posted_at_utc, so giving stories a time here keeps their manual order.
+    # Time for date-only content (IG stories/reels) entered as "N hours ago". It counts as the post's time when
+    # ordering (see _order_posts) and is shown to admins, but is not an exact time (posted_at_utc stays empty).
     estimated_posted_at_utc: Optional[str] = None
     sort_order: int = Field(default=0, index=True)
     media_url: Optional[str] = None

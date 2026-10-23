@@ -48,15 +48,35 @@ class EstimatedPostTimeTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             self.story(estimated_posted_at_utc="2026-10-12T10:00:00")
 
-    def test_estimate_never_changes_the_manual_story_order(self):
-        # A new story lands at the top of its day (manual order). Give the older story the LATER estimate:
-        # if estimates affected ordering, the older story would come first.
+    def ordered_ids(self):
+        query = select(Post).where(Post.parent_id == None)
+        return [p.id for p in self.session.exec(_order_posts(query, "newest")).all()]
+
+    def test_stories_with_estimated_times_sort_by_time(self):
+        # The older story gets the LATER estimate; a new post lands at the top of a manual day, so if the
+        # estimates were ignored the newer-created story would come first.
         older = self.story(estimated_posted_at_utc="2026-10-12T09:00:00Z")
         newer = self.story(estimated_posted_at_utc="2026-10-12T01:00:00Z")
-        older_id = older["id"] if isinstance(older, dict) else older.id
-        newer_id = newer["id"] if isinstance(newer, dict) else newer.id
-        ordered = [p.id for p in self.session.exec(_order_posts(select(Post).where(Post.parent_id == None), "newest")).all()]
-        self.assertEqual(ordered, [newer_id, older_id])
+        self.assertEqual(self.ordered_ids(), [self.id_of(older), self.id_of(newer)])
+
+    def test_a_tweet_is_ordered_by_time_among_estimated_stories(self):
+        story_a = self.story(estimated_posted_at_utc="2026-10-12T03:31:00Z")
+        story_b = self.story(estimated_posted_at_utc="2026-10-12T03:33:00Z")
+        tweet = create_post(Post(
+            author_id=self.author.id, platform="x", content_type="post", external_url="https://x.com/a/status/1",
+            external_id="tweet-1", posted_at="2026-10-12", posted_at_utc="2026-10-12T03:24:41Z",
+        ), self.session)
+        # newest first: 03:33 story, 03:31 story, then the older 03:24 tweet (created last, but not on top)
+        self.assertEqual(self.ordered_ids(), [self.id_of(story_b), self.id_of(story_a), self.id_of(tweet)])
+
+    def test_a_story_without_any_time_keeps_the_day_in_manual_order(self):
+        timed = self.story(estimated_posted_at_utc="2026-10-12T09:00:00Z")
+        untimed = self.story()  # newest in manual order goes to the top of the day
+        self.assertEqual(self.ordered_ids(), [self.id_of(untimed), self.id_of(timed)])
+
+    @staticmethod
+    def id_of(post):
+        return post["id"] if isinstance(post, dict) else post.id
 
 
 if __name__ == "__main__":
