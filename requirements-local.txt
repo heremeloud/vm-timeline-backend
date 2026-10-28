@@ -1,0 +1,7 @@
+# Local-only extras. Install with: pip install -r requirements-local.txt
+# Kept out of requirements.txt so the Vercel bundle stays small (Playwright is ~135MB
+# and needs a Chromium install that Vercel doesn't provide anyway).
+-r requirements.txt
+
+# Instagram post archiving (POST /posts/admin/{id}/archive) and scripts/refresh_*_pfps.py
+playwright

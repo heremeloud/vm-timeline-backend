@@ -14,4 +14,3 @@ pydantic
 pydantic-settings
 certifi
 boto3
-playwright

@@ -4,7 +4,6 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
-import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
@@ -106,6 +105,9 @@ def _file_size(file: UploadFile) -> int:
 
 
 def _r2_client():
+    # Imported here so cold starts that never touch R2 skip loading boto3.
+    import boto3
+
     account_id = _required_env("R2_ACCOUNT_ID")
     return boto3.client(
         "s3",

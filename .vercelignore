@@ -1,0 +1,8 @@
+# Local-only files that the deployed API never imports.
+scripts/
+tests/
+requirements-local.txt
+.venv/
+__pycache__/
+vm-social.db.before-*
+vm-social.pre-*.db
