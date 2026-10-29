@@ -3,9 +3,10 @@ import unittest
 from fastapi import HTTPException
 from sqlmodel import SQLModel, Session, create_engine
 
-from models import Project, ProjectFilmingDay
+from models import Post, Project, ProjectFilmingDay, ProjectFittingWorkshop
+from sqlmodel import select
 from routers.events import get_event_tag_index
-from routers.posts import invalidate_related_counts
+from routers.posts import _links_from_json, _normalize_project_entry_links, invalidate_related_counts
 from routers.projects import (
     ProjectFilmingDayInput,
     ProjectFittingWorkshopInput,
@@ -114,6 +115,74 @@ class ProjectFittingWorkshopTests(unittest.TestCase):
         # a row without its own date falls back to the project's start date
         self.assertEqual(entries["GirlRulesW2"]["start_date"], "2026-03-09")
 
+
+    def linked_post(self, *links):
+        post = Post(
+            platform="instagram", external_url=f"https://example.com/{len(links)}", external_id="x",
+            project_entry_links_json=_normalize_project_entry_links(
+                [{"project_id": project_id, "entry_type": entry_type, "entry_number": number} for project_id, entry_type, number in links]
+            ),
+        )
+        self.session.add(post)
+        self.session.commit()
+        return post
+
+    def links_of(self, post):
+        self.session.refresh(post)
+        return _links_from_json(post.project_entry_links_json)
+
+    def row_ids(self):
+        rows = self.session.exec(select(ProjectFittingWorkshop).where(ProjectFittingWorkshop.project_id == self.project.id)).all()
+        return {(row.kind, row.number): row.id for row in rows}
+
+    def test_renaming_a_day_relinks_its_posts(self):
+        self.save([ProjectFittingWorkshopInput(kind="fitting", number=1), ProjectFittingWorkshopInput(kind="workshop", number=1)])
+        pid = self.project.id
+        post = self.linked_post((pid, "fitting", 1), (999, "fitting", 1))
+        ids = self.row_ids()
+
+        # Fitting Day 1 becomes Prep Day 2; Workshop Day 1 is untouched.
+        self.save([
+            ProjectFittingWorkshopInput(id=ids[("fitting", 1)], kind="prep", number=2),
+            ProjectFittingWorkshopInput(id=ids[("workshop", 1)], kind="workshop", number=1),
+        ])
+
+        # Another project's link with the same type and number stays as it was.
+        self.assertEqual(self.links_of(post), {(pid, "prep", 2), (999, "fitting", 1)})
+
+    def test_swapping_two_days_swaps_their_posts(self):
+        self.save([ProjectFittingWorkshopInput(kind="fitting", number=1), ProjectFittingWorkshopInput(kind="workshop", number=1)])
+        pid = self.project.id
+        fitting_post = self.linked_post((pid, "fitting", 1))
+        workshop_post = self.linked_post((pid, "workshop", 1), (pid, "filming", 1))
+        ids = self.row_ids()
+
+        self.save([
+            ProjectFittingWorkshopInput(id=ids[("fitting", 1)], kind="workshop", number=1),
+            ProjectFittingWorkshopInput(id=ids[("workshop", 1)], kind="fitting", number=1),
+        ])
+
+        self.assertEqual(self.links_of(fitting_post), {(pid, "workshop", 1)})
+        self.assertEqual(self.links_of(workshop_post), {(pid, "fitting", 1), (pid, "filming", 1)})
+
+    def test_renumbering_a_q_day_relinks_its_posts(self):
+        self.save([], filming_days=[ProjectFilmingDayInput(q_number=3)])
+        pid = self.project.id
+        post = self.linked_post((pid, "filming", 3))
+        q3 = self.session.exec(select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == pid)).one()
+
+        self.save(None, filming_days=[ProjectFilmingDayInput(id=q3.id, q_number=4)])
+
+        self.assertEqual(self.links_of(post), {(pid, "filming", 4)})
+
+    def test_rows_sent_without_an_id_leave_links_alone(self):
+        self.save([ProjectFittingWorkshopInput(kind="fitting", number=1)])
+        pid = self.project.id
+        post = self.linked_post((pid, "fitting", 1))
+
+        self.save([ProjectFittingWorkshopInput(kind="workshop", number=1)])
+
+        self.assertEqual(self.links_of(post), {(pid, "fitting", 1)})
 
 if __name__ == "__main__":
     unittest.main()

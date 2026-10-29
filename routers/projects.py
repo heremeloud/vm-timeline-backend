@@ -9,9 +9,10 @@ from pydantic import BaseModel
 from event_photos import event_photos
 from database import get_session
 from search_rules import project_search_filter
-from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, ProjectFittingWorkshop, Author, ProjectAuthorLink, Event
+from models import ProjectRelationshipChart, Project, ProjectFilmingDay, ProjectEpisode, ProjectFittingWorkshop, Author, ProjectAuthorLink, Event, Post
 from middleware.auth import require_admin
 from routers.project_categories import project_category_names
+from routers.posts import _normalize_project_entry_links, _project_entry_link_like
 from relationship_chart import RelationshipChartData
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
@@ -267,16 +268,55 @@ def _clean_hashtag(value: Optional[str]) -> Optional[str]:
     return clean or None
 
 
+def _relink_project_entry_posts(session: Session, project_id: int, renames: Dict[tuple, tuple]) -> None:
+    """Point posts' explicit row links at a row's new (entry_type, number) after the row was renamed (F1 -> W1, Q3 -> Q4).
+
+    Renames are applied all at once, so swapping two rows swaps their posts too.
+    """
+    if not renames:
+        return
+    for post in session.exec(select(Post).where(Post.project_entry_links_json.like(_project_entry_link_like(project_id)))).all():
+        try:
+            links = json.loads(post.project_entry_links_json or "[]")
+        except (TypeError, ValueError):
+            continue
+        changed = False
+        for link in links:
+            if not isinstance(link, dict) or link.get("project_id") != project_id:
+                continue
+            new_key = renames.get((link.get("entry_type"), link.get("entry_number")))
+            if new_key:
+                link["entry_type"], link["entry_number"] = new_key
+                changed = True
+        if changed:
+            post.project_entry_links_json = _normalize_project_entry_links(links)
+            session.add(post)
+
+
 def _replace_series_metadata(session: Session, project_id: int, filming_days, episodes, fitting_workshops=None) -> None:
-    """Replace each collection that was sent; a collection left as None is not touched."""
+    """Replace each collection that was sent; a collection left as None is not touched.
+
+    A sent row that carries the `id` of an existing row and changes its type or number is a rename:
+    posts linked to the old row are relinked to the new one (`_relink_project_entry_posts`).
+    """
+    renames: Dict[tuple, tuple] = {}
+
+    def track_rename(old_keys: Dict[int, tuple], row_id: Optional[int], new_key: tuple) -> None:
+        old_key = old_keys.pop(row_id, None) if row_id is not None else None
+        if old_key and old_key != new_key:
+            renames[old_key] = new_key
+
     if filming_days is not None:
+        old_keys = {}
         for row in session.exec(select(ProjectFilmingDay).where(ProjectFilmingDay.project_id == project_id)).all():
+            old_keys[row.id] = ("filming", row.q_number)
             session.delete(row)
         seen_qs = set()
         for row in filming_days:
             if row.q_number < 1 or row.q_number in seen_qs:
                 raise HTTPException(status_code=400, detail="Q numbers must be positive and unique")
             seen_qs.add(row.q_number)
+            track_rename(old_keys, row.id, ("filming", row.q_number))
             session.add(ProjectFilmingDay(
                 project_id=project_id,
                 q_number=row.q_number,
@@ -286,13 +326,16 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
             ))
 
     if episodes is not None:
+        old_keys = {}
         for row in session.exec(select(ProjectEpisode).where(ProjectEpisode.project_id == project_id)).all():
+            old_keys[row.id] = ("episodes", row.episode_number)
             session.delete(row)
         seen_episodes = set()
         for row in episodes:
             if row.episode_number < 0 or row.episode_number in seen_episodes:
                 raise HTTPException(status_code=400, detail="Episode numbers must be zero or greater and unique")
             seen_episodes.add(row.episode_number)
+            track_rename(old_keys, row.id, ("episodes", row.episode_number))
             session.add(ProjectEpisode(
                 project_id=project_id,
                 episode_number=row.episode_number,
@@ -303,7 +346,9 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
             ))
 
     if fitting_workshops is not None:
+        old_keys = {}
         for row in session.exec(select(ProjectFittingWorkshop).where(ProjectFittingWorkshop.project_id == project_id)).all():
+            old_keys[row.id] = (row.kind, row.number)
             session.delete(row)
         seen_fw = set()
         for row in fitting_workshops:
@@ -313,6 +358,7 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
             if row.number < 1 or (kind, row.number) in seen_fw:
                 raise HTTPException(status_code=400, detail="Fitting and workshop numbers must be positive and unique per type")
             seen_fw.add((kind, row.number))
+            track_rename(old_keys, row.id, (kind, row.number))
             session.add(ProjectFittingWorkshop(
                 project_id=project_id,
                 kind=kind,
@@ -322,12 +368,15 @@ def _replace_series_metadata(session: Session, project_id: int, filming_days, ep
                 keyword=(row.keyword or "").strip() or None,
             ))
 
+    _relink_project_entry_posts(session, project_id, renames)
+
 
 # ----------------------------
 # Schemas
 # ----------------------------
 
 class ProjectFilmingDayInput(BaseModel):
+    id: Optional[int] = None  # the existing row this one replaces, so a rename can relink its posts
     q_number: int
     filming_date: Optional[str] = None
     hashtag: Optional[str] = None
@@ -335,6 +384,7 @@ class ProjectFilmingDayInput(BaseModel):
 
 
 class ProjectFittingWorkshopInput(BaseModel):
+    id: Optional[int] = None  # the existing row this one replaces, so a rename can relink its posts
     kind: str
     number: int
     date: Optional[str] = None
@@ -343,6 +393,7 @@ class ProjectFittingWorkshopInput(BaseModel):
 
 
 class ProjectEpisodeInput(BaseModel):
+    id: Optional[int] = None  # the existing row this one replaces, so a rename can relink its posts
     episode_number: int
     air_date: Optional[str] = None
     title: Optional[str] = None
