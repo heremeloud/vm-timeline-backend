@@ -270,6 +270,7 @@ class Project(SQLModel, table=True):
     mydramalist_url: Optional[str] = None         # MyDramaList page URL
     gmmtv_url: Optional[str] = None              # GMMTV official site URL
     official_twitter_url: Optional[str] = None   # official series Twitter/X account
+    fitting_workshops_by_date: bool = Field(default=True)  # list fitting / workshop / prep days old to new; off groups them by type
     spotify_url: Optional[str] = None             # Spotify album/track URL
     apple_music_url: Optional[str] = None         # Apple Music album/track URL
     start_date: Optional[str] = None              # YYYY-MM-DD

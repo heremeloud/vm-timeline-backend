@@ -453,6 +453,11 @@ def run_migrations():
             conn.commit()
             print("Migration: added thumbnail_focal_y to project")
 
+        if "fitting_workshops_by_date" not in project_cols:
+            conn.execute(text("ALTER TABLE project ADD COLUMN fitting_workshops_by_date BOOLEAN NOT NULL DEFAULT 1"))
+            conn.commit()
+            print("Migration: added fitting_workshops_by_date to project")
+
         # ── author table ─────────────────────────────────────────
         result = conn.execute(text("PRAGMA table_info(author)"))
         author_cols = {row[1] for row in result}

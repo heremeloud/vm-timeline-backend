@@ -23,6 +23,16 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 # Helpers
 # ----------------------------
 
+def _fitting_workshop_sort_key(by_date: bool):
+    """By date: old to new whatever the type, undated days last, same-date days in fitting, workshop, prep order.
+    Otherwise grouped by type (fitting, workshop, prep), then by number."""
+    def key(row: ProjectFittingWorkshop):
+        kind_order = FITTING_WORKSHOP_KINDS.index(row.kind) if row.kind in FITTING_WORKSHOP_KINDS else len(FITTING_WORKSHOP_KINDS)
+        date_order = (not row.date, row.date or "") if by_date else (False, "")
+        return (*date_order, kind_order, row.number, row.id or 0)
+    return key
+
+
 def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     links = session.exec(
         select(ProjectAuthorLink).where(ProjectAuthorLink.project_id == p.id)
@@ -159,12 +169,7 @@ def _serialize_project(session: Session, p: Project) -> Dict[str, Any]:
     ).all()
     obj["filming_days"] = [row.dict() for row in filming_days]
     obj["episode_metadata"] = [row.dict() for row in episodes]
-    obj["fitting_workshops"] = [
-        row.dict() for row in sorted(
-            fitting_workshops,
-            key=lambda row: (FITTING_WORKSHOP_KINDS.index(row.kind) if row.kind in FITTING_WORKSHOP_KINDS else len(FITTING_WORKSHOP_KINDS), row.number, row.id or 0),
-        )
-    ]
+    obj["fitting_workshops"] = [row.dict() for row in sorted(fitting_workshops, key=_fitting_workshop_sort_key(p.fitting_workshops_by_date))]
     return obj
 
 
@@ -423,6 +428,7 @@ class ProjectCreate(BaseModel):
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
     official_twitter_url: Optional[str] = None
+    fitting_workshops_by_date: bool = True
     spotify_url: Optional[str] = None
     apple_music_url: Optional[str] = None
     parent_project_id: Optional[int] = None
@@ -458,6 +464,7 @@ class ProjectUpdate(BaseModel):
     mydramalist_url: Optional[str] = None
     gmmtv_url: Optional[str] = None
     official_twitter_url: Optional[str] = None
+    fitting_workshops_by_date: Optional[bool] = None
     spotify_url: Optional[str] = None
     apple_music_url: Optional[str] = None
     parent_project_id: Optional[int] = None
@@ -618,6 +625,7 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_sessio
         mydramalist_url=(payload.mydramalist_url.strip() if payload.mydramalist_url else None),
         gmmtv_url=(payload.gmmtv_url.strip() if payload.gmmtv_url else None),
         official_twitter_url=(payload.official_twitter_url.strip() if payload.official_twitter_url else None),
+        fitting_workshops_by_date=payload.fitting_workshops_by_date,
         spotify_url=(payload.spotify_url.strip() if payload.spotify_url else None),
         apple_music_url=(payload.apple_music_url.strip() if payload.apple_music_url else None),
         parent_project_id=payload.parent_project_id or None,
@@ -729,6 +737,8 @@ def update_project(project_id: int, payload: ProjectUpdate, session: Session = D
         p.gmmtv_url = payload.gmmtv_url.strip() or None
     if payload.official_twitter_url is not None:
         p.official_twitter_url = payload.official_twitter_url.strip() or None
+    if payload.fitting_workshops_by_date is not None:
+        p.fitting_workshops_by_date = payload.fitting_workshops_by_date
     if payload.spotify_url is not None:
         p.spotify_url = payload.spotify_url.strip() or None
     if payload.apple_music_url is not None:

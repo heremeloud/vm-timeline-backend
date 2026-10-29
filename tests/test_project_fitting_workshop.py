@@ -43,9 +43,37 @@ class ProjectFittingWorkshopTests(unittest.TestCase):
 
         rows = _serialize_project(self.session, self.project)["fitting_workshops"]
 
-        self.assertEqual([(r["kind"], r["number"]) for r in rows], [("fitting", 1), ("fitting", 2), ("workshop", 1)])
-        workshop = rows[2]
+        # old to new by date across types; the undated Fitting Day 2 goes last
+        self.assertEqual([(r["kind"], r["number"]) for r in rows], [("fitting", 1), ("workshop", 1), ("fitting", 2)])
+        workshop = rows[1]
         self.assertEqual((workshop["date"], workshop["hashtag"], workshop["keyword"]), ("2025-08-20", "GirlRulesW1", "GR WORKSHOP"))
+
+    def test_days_are_listed_old_to_new_across_types(self):
+        self.save([
+            ProjectFittingWorkshopInput(kind="fitting", number=1, date="2025-08-02"),
+            ProjectFittingWorkshopInput(kind="fitting", number=2, date="2025-08-25"),
+            ProjectFittingWorkshopInput(kind="workshop", number=1, date="2025-08-10"),
+            ProjectFittingWorkshopInput(kind="prep", number=1, date="2025-08-10"),
+            ProjectFittingWorkshopInput(kind="workshop", number=2, date="2025-08-20"),
+        ])
+
+        rows = _serialize_project(self.session, self.project)["fitting_workshops"]
+        self.assertEqual(
+            [(r["kind"], r["number"]) for r in rows],
+            [("fitting", 1), ("workshop", 1), ("prep", 1), ("workshop", 2), ("fitting", 2)],
+        )
+
+    def test_unticking_order_by_date_groups_days_by_type(self):
+        self.project.fitting_workshops_by_date = False
+        self.session.add(self.project)
+        self.save([
+            ProjectFittingWorkshopInput(kind="workshop", number=1, date="2025-08-01"),
+            ProjectFittingWorkshopInput(kind="fitting", number=2, date="2025-08-05"),
+            ProjectFittingWorkshopInput(kind="fitting", number=1, date="2025-08-20"),
+        ])
+
+        rows = _serialize_project(self.session, self.project)["fitting_workshops"]
+        self.assertEqual([(r["kind"], r["number"]) for r in rows], [("fitting", 1), ("fitting", 2), ("workshop", 1)])
 
     def test_prep_days_are_a_third_type_listed_after_fittings_and_workshops(self):
         self.save([
